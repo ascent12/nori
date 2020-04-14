@@ -10,6 +10,7 @@
 #include <wayland-client-protocol.h>
 
 struct wayland_surface;
+struct scene;
 
 struct vulkan_queue {
 	uint32_t index;
@@ -44,10 +45,22 @@ struct vulkan_image {
 	VkImageView image_view;
 	VkFramebuffer framebuffer;
 
-	VkCommandBuffer command_buffer;
-	VkFence fence;
 	bool undefined;
 };
+
+/* Per-frame resources */
+struct vulkan_frame {
+	struct wl_list link;
+
+	VkCommandBuffer command_buffer;
+
+	VkDeviceMemory memory;
+	VkBuffer vertex_buf;
+	VkBuffer index_buf;
+
+	VkFence fence;
+};
+
 
 struct vulkan_surface {
 	struct vulkan *vk;
@@ -66,6 +79,8 @@ struct vulkan_surface {
 
 	VkSemaphore acquire;
 	VkSemaphore done;
+
+	struct wl_list frame_res;
 };
 
 int
@@ -80,7 +95,7 @@ void
 vulkan_surface_resize(struct vulkan_surface *surf, uint32_t w, uint32_t h);
 
 int
-vulkan_surface_repaint(struct vulkan_surface *vk_surface);
+vulkan_surface_repaint(struct vulkan_surface *vk_surface, struct scene *scene);
 
 int
 vulkan_init_renderpass(struct vulkan *vk,

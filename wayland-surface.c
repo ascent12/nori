@@ -169,7 +169,7 @@ wayland_toplevel_repaint(struct wayland_surface *surf, void *data)
 	}
 
 	wayland_surface_add_feedback(&top->base);
-	vulkan_surface_repaint(&top->vk_surf);
+	vulkan_surface_repaint(&top->vk_surf, top->scene);
 }
 
 static void
@@ -253,6 +253,10 @@ wayland_toplevel_create(struct wayland *wl, struct vulkan *vk)
 		return NULL;
 
 	wayland_surface_init(&top->base, wl, wayland_toplevel_repaint, top);
+
+	top->scene = scene_create();
+	top->root = scene_layer_create();
+	scene_set_root(top->scene, top->root);
 
 	if (vulkan_surface_init(&top->vk_surf, vk, &top->base) < 0)
 		goto error;

@@ -2,6 +2,7 @@
 
 #include "vulkan.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include <wayland-client-protocol.h>
 
 #include "wayland.h"
+#include "scene.h"
 
 static int
 create_image_view(struct vulkan *vk,
@@ -80,48 +82,6 @@ create_framebuffer(struct vulkan *vk,
 }
 
 static int
-create_fence(struct vulkan *vk,
-	     struct vulkan_image *image)
-{
-	VkResult res;
-	static const VkFenceCreateInfo info = {
-		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-		.flags = VK_FENCE_CREATE_SIGNALED_BIT,
-	};
-
-	res = vkCreateFence(vk->logical_device, &info, NULL, &image->fence);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateFence: 0x%x\n", res);
-		return -1;
-	}
-
-	return 0;
-}
-
-static int
-alloc_command_buffers(struct vulkan *vk,
-		      VkCommandBuffer *bufs,
-		      uint32_t n)
-{
-	VkResult res;
-	const VkCommandBufferAllocateInfo info = {
-		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-		.commandPool = vk->gfx_queue->command_pool,
-		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-		.commandBufferCount = n,
-	};
-
-	res = vkAllocateCommandBuffers(vk->logical_device, &info, bufs);
-	if (res < 0) {
-		fprintf(stderr, "vkAllocateCommandBuffers: 0x%x\n",
-			res);
-		return -1;
-	}
-
-	return 0;
-}
-
-static int
 get_swapchain_images(struct vulkan *vk,
 		     struct vulkan_surface *surf,
 		     uint32_t width, uint32_t height)
@@ -155,23 +115,6 @@ get_swapchain_images(struct vulkan *vk,
 			return -1;
 
 		img->undefined = true;
-	}
-
-	if (num_images > surf->num_images) {
-		uint32_t new = num_images - surf->num_images;
-		VkCommandBuffer buffers[new];
-
-		if (alloc_command_buffers(vk, buffers, new) < 0)
-			return -1;
-
-		for (uint32_t i = surf->num_images; i < num_images; ++i) {
-			struct vulkan_image *img = &surf->images[i];
-
-			if (create_fence(vk, img) < 0)
-				return -1;
-
-			img->command_buffer = buffers[i];
-		}
 	}
 
 	surf->num_images = num_images;
@@ -228,16 +171,11 @@ cleanup_old_swapchain(struct vulkan *vk,
 	for (uint32_t i = 0; i < surf->num_images; ++i) {
 		struct vulkan_image *img = &surf->images[i];
 
-		vkWaitForFences(vk->logical_device, 1, &img->fence,
-				VK_TRUE, UINT64_MAX);
-
 		vkDestroyFramebuffer(vk->logical_device, img->framebuffer, NULL);
 		vkDestroyImageView(vk->logical_device, img->image_view, NULL);
 		img->image = VK_NULL_HANDLE;
 		img->image_view = VK_NULL_HANDLE;
 		img->framebuffer = VK_NULL_HANDLE;
-
-		/* The command buffer and the fence for it are preserved */
 	}
 }
 
@@ -246,6 +184,8 @@ vulkan_surface_resize_swapchain(struct vulkan *vk,
 				struct vulkan_surface *surf,
 				uint32_t width, uint32_t height)
 {
+	vkQueueWaitIdle(vk->gfx_queue->queue);
+
 	cleanup_old_swapchain(vk, surf);
 
 	if (create_swapchain(vk, surf, width, height) < 0)
@@ -264,8 +204,6 @@ vulkan_surface_resize(struct vulkan_surface *surf, uint32_t w, uint32_t h)
 	surf->width = w;
 	surf->height = h;
 }
-
-extern struct wl_array glyphs, indices;
 
 static void
 create_buffer(struct vulkan *vk, uint64_t size, VkBufferUsageFlags usage,
@@ -290,9 +228,10 @@ create_buffer(struct vulkan *vk, uint64_t size, VkBufferUsageFlags usage,
 }
 
 static void
-create_buffers(struct vulkan *vk, VkBuffer *vert, VkBuffer *index,
-	       VkDeviceMemory *mem)
+create_buffers(struct vulkan *vk, struct scene *scene, size_t *index_size,
+	       VkBuffer *vert, VkBuffer *index, VkDeviceMemory *mem)
 {
+	size_t vert_size;
 	VkResult res;
 	VkMemoryRequirements vert_req;
 	VkMemoryRequirements index_req;
@@ -308,9 +247,13 @@ create_buffers(struct vulkan *vk, VkBuffer *vert, VkBuffer *index,
 	void *v_data;
 	uint8_t *data;
 
-	create_buffer(vk, glyphs.size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+	scene_get_vertex_index_sizes(scene, &vert_size, index_size);
+
+	create_buffer(vk, vert_size * sizeof(float),
+		      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 		      vert, &vert_req);
-	create_buffer(vk, indices.size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+	create_buffer(vk, *index_size * sizeof(uint16_t),
+		      VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 		      index, &index_req);
 
 	printf("Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
@@ -360,15 +303,24 @@ create_buffers(struct vulkan *vk, VkBuffer *vert, VkBuffer *index,
 		abort();
 	}
 
-	res = vkBindBufferMemory(vk->logical_device, *vert, *mem, 0);
-	if (res < 0) {
-		fprintf(stderr, "vkBindBufferMemory: 0x%x\n", res);
-		abort();
-	}
+	const VkBindBufferMemoryInfo bind_info[2] = {
+		{
+			.sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
+			.buffer = *vert,
+			.memory = *mem,
+			.memoryOffset = 0,
+		},
+		{
+			.sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
+			.buffer = *index,
+			.memory = *mem,
+			.memoryOffset = index_offset,
+		},
+	};
 
-	res = vkBindBufferMemory(vk->logical_device, *index, *mem, index_offset);
+	res = vkBindBufferMemory2(vk->logical_device, 2, bind_info);
 	if (res < 0) {
-		fprintf(stderr, "vkBindBufferMemory: 0x%x\n", res);
+		fprintf(stderr, "vkBindBufferMemory2: 0x%x\n", res);
 		abort();
 	}
 
@@ -380,40 +332,103 @@ create_buffers(struct vulkan *vk, VkBuffer *vert, VkBuffer *index,
 
 	data = v_data;
 
-	memcpy(&data[0], glyphs.data, glyphs.size);
-	memcpy(&data[index_offset], indices.data, indices.size);
+	scene_get_vertex_index_data(scene, (float *)data,
+				    (uint16_t *)(data + index_offset));
 
 	vkUnmapMemory(vk->logical_device, *mem);
 }
 
-int
-vulkan_surface_repaint(struct vulkan_surface *vk_surface)
+static struct vulkan_frame *
+vulkan_surface_prepare_frame(struct vulkan_surface *surf)
 {
-	struct vulkan *vk = vk_surface->vk;
-	static VkBuffer vert_buf, index_buf;
-	static VkDeviceMemory mem;
-	static bool do_once = false;
+	struct vulkan *vk = surf->vk;
+	struct vulkan_frame *f = NULL, *iter;
 	VkResult res;
-	uint32_t i;
 
-	/* Hack until vulkan memory is sorted out */
-	if (!do_once) {
-		create_buffers(vk, &vert_buf, &index_buf, &mem);
-		do_once = true;
+	wl_list_for_each(iter, &surf->frame_res, link) {
+		res = vkGetFenceStatus(vk->logical_device, iter->fence);
+		if (res == VK_SUCCESS) {
+			f = iter;
+			break;
+		}
 	}
 
-	if (vk_surface->needs_realloc) {
-		if (vulkan_surface_resize_swapchain(vk, vk_surface,
-						    vk_surface->width,
-						    vk_surface->height) < 0)
+	if (f) {
+		vkResetFences(vk->logical_device, 1, &f->fence);
+
+		vkDestroyBuffer(vk->logical_device, f->vertex_buf, NULL);
+		vkDestroyBuffer(vk->logical_device, f->index_buf, NULL);
+		vkFreeMemory(vk->logical_device, f->memory, NULL);
+
+		f->vertex_buf = VK_NULL_HANDLE;
+		f->index_buf = VK_NULL_HANDLE;
+		f->memory = VK_NULL_HANDLE;
+
+		/* Reinsert at end of queue */
+		wl_list_remove(&f->link);
+		wl_list_insert(surf->frame_res.prev, &f->link);
+
+		return f;
+	} else {
+		f = calloc(1, sizeof *f);
+		if (!f)
+			return NULL;
+
+		const VkCommandBufferAllocateInfo cmd_info = {
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+			.commandPool = vk->gfx_queue->command_pool,
+			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+			.commandBufferCount = 1,
+		};
+
+		res = vkAllocateCommandBuffers(vk->logical_device, &cmd_info,
+					       &f->command_buffer);
+		if (res < 0) {
+			fprintf(stderr, "vkAllocateCommandBuffers: 0x%x\n", res);
+			free(f);
+			return NULL;
+		}
+
+		static const VkFenceCreateInfo fence_info = {
+			.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+			.flags = 0,
+		};
+
+		res = vkCreateFence(vk->logical_device, &fence_info, NULL,
+				    &f->fence);
+		if (res < 0) {
+			fprintf(stderr, "vkCreateFence: 0x%x\n", res);
+			return NULL;
+		}
+	}
+
+	wl_list_insert(surf->frame_res.prev, &f->link);
+
+	return f;
+}
+
+int
+vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
+{
+	struct vulkan *vk = surf->vk;
+	VkResult res;
+	uint32_t i;
+	size_t index_size;
+	struct vulkan_image *img;
+	struct vulkan_frame *frame;
+
+	if (surf->needs_realloc) {
+		if (vulkan_surface_resize_swapchain(vk, surf,
+						    surf->width,
+						    surf->height) < 0)
 			return -1;
-		vk_surface->needs_realloc = false;
+		surf->needs_realloc = false;
 	}
 
 	res = vkAcquireNextImageKHR(vk->logical_device,
-				    vk_surface->swapchain,
+				    surf->swapchain,
 				    (uint64_t)-1,
-				    vk_surface->acquire,
+				    surf->acquire,
 				    VK_NULL_HANDLE,
 				    &i);
 	if (res < 0) {
@@ -422,24 +437,25 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface)
 		return 1;
 	}
 	if (res == VK_SUBOPTIMAL_KHR)
-		vk_surface->needs_realloc = true;
+		surf->needs_realloc = true;
 
-	struct vulkan_image *img = &vk_surface->images[i];
+	img = &surf->images[i];
+	frame = vulkan_surface_prepare_frame(surf);
 
-	vkWaitForFences(vk->logical_device, 1, &img->fence,
-			VK_TRUE, UINT64_MAX);
-	vkResetFences(vk->logical_device, 1, &img->fence);
+	create_buffers(vk, scene, &index_size,
+		       &frame->vertex_buf, &frame->index_buf,
+		       &frame->memory);
 
 	static const VkCommandBufferBeginInfo begin = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 	};
 
-	res = vkBeginCommandBuffer(img->command_buffer, &begin);
+	res = vkBeginCommandBuffer(frame->command_buffer, &begin);
 	if (res < 0) {
 		fprintf(stderr, "vkBeginCommandBuffer: 0x%x\n",
 			res);
-		return 1;
+		return -1;
 	}
 
 	/*
@@ -464,7 +480,7 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface)
 				.layerCount = 1,
 			},
 		};
-		vkCmdPipelineBarrier(img->command_buffer,
+		vkCmdPipelineBarrier(frame->command_buffer,
 				     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 				     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 				     0,
@@ -481,32 +497,32 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface)
 		.framebuffer = img->framebuffer,
 		.renderArea.offset.x = 0,
 		.renderArea.offset.y = 0,
-		.renderArea.extent.width = vk_surface->width,
-		.renderArea.extent.height = vk_surface->height,
+		.renderArea.extent.width = surf->width,
+		.renderArea.extent.height = surf->height,
 		.clearValueCount = 0,
 		.pClearValues = NULL,
 	};
 
-	vkCmdBeginRenderPass(img->command_buffer, &rp_info,
+	vkCmdBeginRenderPass(frame->command_buffer, &rp_info,
 			     VK_SUBPASS_CONTENTS_INLINE);
 
 	const VkViewport viewport = {
 		.x = 0,
 		.y = 0,
-		.width = vk_surface->width,
-		.height = vk_surface->height,
+		.width = surf->width,
+		.height = surf->height,
 		.minDepth = 0.0f,
 		.maxDepth = 1.0f,
 	};
-	vkCmdSetViewport(img->command_buffer, 0, 1, &viewport);
+	vkCmdSetViewport(frame->command_buffer, 0, 1, &viewport);
 
 	const VkRect2D scissor = {
 		.offset.x = 0,
 		.offset.y = 0,
-		.extent.width = vk_surface->width,
-		.extent.height = vk_surface->height,
+		.extent.width = surf->width,
+		.extent.height = surf->height,
 	};
-	vkCmdSetScissor(img->command_buffer, 0, 1, &scissor);
+	vkCmdSetScissor(frame->command_buffer, 0, 1, &scissor);
 
 	static const VkClearAttachment clear = {
 		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -518,16 +534,17 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface)
 		.baseArrayLayer = 0,
 		.layerCount = 1,
 	};
-	vkCmdClearAttachments(img->command_buffer,
+	vkCmdClearAttachments(frame->command_buffer,
 			      1, &clear, 1, &clear_rect);
 
-	vkCmdBindPipeline(img->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+	vkCmdBindPipeline(frame->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 			  vk->renderpass.pipeline);
 
 	static const VkDeviceSize offset = 0;
-	vkCmdBindVertexBuffers(img->command_buffer, 0, 1, &vert_buf, &offset);
+	vkCmdBindVertexBuffers(frame->command_buffer, 0, 1,
+			       &frame->vertex_buf, &offset);
 
-	vkCmdBindIndexBuffer(img->command_buffer, index_buf,
+	vkCmdBindIndexBuffer(frame->command_buffer, frame->index_buf,
 			     0, VK_INDEX_TYPE_UINT16);
 
 	// Padded out to fit mat3 row alignment
@@ -539,25 +556,24 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface)
 	};
 #else
 	float mat[12] = {
-		2.0f / 100.0f, 0.0f, 0.0f, NAN,
-		0.0f, 2.0f / 20.0f, 0.0f, NAN,
+		2.0f / 200.0f, 0.0f, 0.0f, NAN,
+		0.0f, 2.0f / 200.0f, 0.0f, NAN,
 		-1.0f, -1.0f, 1.0f, NAN,
 	};
 #endif
 
-	vkCmdPushConstants(img->command_buffer, vk->renderpass.pipeline_layout,
+	vkCmdPushConstants(frame->command_buffer, vk->renderpass.pipeline_layout,
 			   VK_SHADER_STAGE_VERTEX_BIT, 0,
 			   sizeof mat, mat);
 
-	vkCmdDrawIndexed(img->command_buffer, indices.size / sizeof(uint16_t), 1, 0, 0, 0);
+	vkCmdDrawIndexed(frame->command_buffer, index_size, 1, 0, 0, 0);
 
-	vkCmdEndRenderPass(img->command_buffer);
+	vkCmdEndRenderPass(frame->command_buffer);
 
-	res = vkEndCommandBuffer(img->command_buffer);
+	res = vkEndCommandBuffer(frame->command_buffer);
 	if (res < 0) {
-		fprintf(stderr, "vkEndCommandBuffer: 0x%x\n",
-			res);
-		return 1;
+		fprintf(stderr, "vkEndCommandBuffer: 0x%x\n", res);
+		return -1;
 	}
 
 	static const VkPipelineStageFlags wait =
@@ -565,37 +581,35 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface)
 	const VkSubmitInfo submit_info = {
 		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 		.waitSemaphoreCount = 1,
-		.pWaitSemaphores = &vk_surface->acquire,
+		.pWaitSemaphores = &surf->acquire,
 		.pWaitDstStageMask = &wait,
 		.commandBufferCount = 1,
-		.pCommandBuffers = &img->command_buffer,
+		.pCommandBuffers = &frame->command_buffer,
 		.signalSemaphoreCount = 1,
-		.pSignalSemaphores = &vk_surface->done,
+		.pSignalSemaphores = &surf->done,
 	};
 
 	res = vkQueueSubmit(vk->gfx_queue->queue, 1, &submit_info,
-			    img->fence);
+			    frame->fence);
 	if (res < 0) {
-		fprintf(stderr, "vkQueueSubmit: 0x%x\n",
-			res);
-		return 1;
+		fprintf(stderr, "vkQueueSubmit: 0x%x\n", res);
+		return -1;
 	}
 
 	const VkPresentInfoKHR present_info = {
 		.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
 		.waitSemaphoreCount = 1,
-		.pWaitSemaphores = &vk_surface->done,
+		.pWaitSemaphores = &surf->done,
 		.swapchainCount = 1,
-		.pSwapchains = &vk_surface->swapchain,
+		.pSwapchains = &surf->swapchain,
 		.pImageIndices = &i,
 		.pResults = NULL,
 	};
 
 	res = vkQueuePresentKHR(vk->gfx_queue->queue, &present_info);
 	if (res < 0) {
-		fprintf(stderr, "vkQueuePresentKHR: 0x%x\n",
-			res);
-		return 1;
+		fprintf(stderr, "vkQueuePresentKHR: 0x%x\n", res);
+		return -1;
 	}
 
 	return 0;
@@ -674,6 +688,7 @@ vulkan_surface_init(struct vulkan_surface *surf,
 
 	surf->vk = vk;
 	surf->needs_realloc = true;
+	wl_list_init(&surf->frame_res);
 
 	return 0;
 }

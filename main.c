@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
 #include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <limits.h>
-#include <assert.h>
-#include <math.h>
+#include <time.h>
 
 #include <fontconfig/fontconfig.h>
 #include <fontconfig/fcfreetype.h>
@@ -28,16 +30,55 @@
 #include "scene.h"
 #include "wayland.h"
 #include "vulkan.h"
+#include "timespec-util.h"
 
 #include "xdg-shell-protocol.h"
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
 
-/* Horrible hack until I wire up scene to toplevel/renderer properly */
-struct wl_array glyphs, indices;
+/*
+ * Hack testing code for scene graph.
+ * Will be deleted.
+ */
+static int
+timer_func(void *data)
+{
+	struct wayland_toplevel *top = data;
+	struct timespec time;
+	uint32_t time_ms;
+	float pos;
+
+	clock_gettime(CLOCK_MONOTONIC, &time);
+	time_ms = timespec_to_msec(&time);
+	pos = (sinf(time_ms / 1000.0f) + 1.0f) * 50.0f;
+
+	scene_set_pos(top->root, top->root->base.x, pos);
+
+	wl_event_source_timer_update(top->timer, 5);
+	wayland_surface_schedule_repaint(&top->base);
+	return 0;
+}
 
 int main(void)
 {
+	struct wl_event_loop *ev = wl_event_loop_create();
+	struct wayland wl = {0};
+	struct vulkan vk = {0};
+	struct wayland_toplevel *top;
+
+	wl_list_init(&wl.seats);
+
+	if (wayland_connect(&wl, ev) < 0)
+		return 1;
+
+	if (vulkan_create(&vk, wl.display) < 0)
+		return 1;
+
+	if (vulkan_init_renderpass(&vk, &vk.renderpass) < 0)
+		return 1;
+
+	top = wayland_toplevel_create(&wl, &vk);
+
 	const char *to_print = u8"AaBbCcDdEe";
 	size_t to_print_len = strlen(to_print);
 	hb_unicode_funcs_t *funcs = hb_unicode_funcs_get_default();
@@ -106,18 +147,8 @@ int main(void)
 	hb_buffer_t *shaped = hb_buffer_create();
 	hb_buffer_t *scratch = hb_buffer_create();
 
-	//struct wl_array glyphs, indices;
-	wl_array_init(&glyphs);
-	wl_array_init(&indices);
-
 	/* 26.6 fixed point format */
 	int32_t pen_26_6 = 0;
-
-	int primitive_index = 0;
-
-	struct scene *scene = scene_create();
-	struct scene_layer *root = scene_layer_create();
-	scene_set_root(scene, root);
 
 	for (const char *str = to_print; str <= to_print + to_print_len;) {
 		FcChar32 ucs = 0;
@@ -245,31 +276,8 @@ int main(void)
 			int32_t width = bitmap->width;
 			int32_t height = bitmap->rows;
 
-			float *verts = wl_array_add(&glyphs, sizeof *verts * 8);
-			// Top left
-			verts[0] = x;
-			verts[1] = y;
-			// Top right
-			verts[2] = x + width;
-			verts[3] = y;
-			// Bottom right
-			verts[4] = x + width;
-			verts[5] = y + height;
-			// Bottom left
-			verts[6] = x;
-			verts[7] = y + height;
-
-			uint16_t *ind = wl_array_add(&indices, sizeof *ind * 6);
-			ind[0] = primitive_index + 0;
-			ind[1] = primitive_index + 1;
-			ind[2] = primitive_index + 2;
-			ind[3] = primitive_index + 0;
-			ind[4] = primitive_index + 2;
-			ind[5] = primitive_index + 3;
-			primitive_index += 4;
-
 			struct scene_view *v = scene_view_create(width, height);
-			scene_push(root, v);
+			scene_push(top->root, v);
 			scene_set_pos(v, x, y);
 advance:
 			pen_26_6 += pos[i].x_advance;
@@ -295,45 +303,12 @@ add:
 
 	printf("===\n");
 
-	scene_dump(scene);
+	scene_dump(top->scene);
 
 	printf("===\n");
 
-	float (*glyphs_data)[8] = glyphs.data;
-	for (size_t i = 0; i < glyphs.size / sizeof *glyphs_data; ++i) {
-		for (int j = 0; j < 4; ++j)
-			printf("(%.1f, %.1f), ", glyphs_data[i][j * 2],
-			       glyphs_data[i][j * 2 + 1]);
-		printf("\n");
-	}
-
-	printf("===\n");
-
-	uint16_t (*indices_data)[6] = indices.data;
-	for (size_t i = 0; i < indices.size / sizeof *indices_data; ++i) {
-		for (int j = 0; j < 6; ++j)
-			printf("%hu, ", indices_data[i][j]);
-		printf("\n");
-	}
-
-	printf("===\n");
-
-	struct wl_event_loop *ev = wl_event_loop_create();
-	struct wayland wl = {0};
-	struct vulkan vk = {0};
-
-	wl_list_init(&wl.seats);
-
-	if (wayland_connect(&wl, ev) < 0)
-		return 1;
-
-	if (vulkan_create(&vk, wl.display) < 0)
-		return 1;
-
-	if (vulkan_init_renderpass(&vk, &vk.renderpass) < 0)
-		return 1;
-
-	struct wayland_toplevel *top = wayland_toplevel_create(&wl, &vk);
+	top->timer = wl_event_loop_add_timer(ev, timer_func, top);
+	wl_event_source_timer_update(top->timer, 5);
 
 	wayland_surface_schedule_repaint(&top->base);
 	while (!wl.exit && !top->close)

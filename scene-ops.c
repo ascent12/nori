@@ -11,7 +11,20 @@ node_disconnect(struct scene_node *n)
 {
 	wl_list_remove(&n->link);
 	wl_list_init(&n->link);
+
+	for (struct scene_layer *p = n->parent; p; p = p->base.parent) {
+		assert(p->base.decendent_views >= n->decendent_views);
+		p->base.decendent_views -= n->decendent_views;
+	}
+
 	n->parent = NULL;
+}
+
+static void
+node_set_parent(struct scene_layer *p, struct scene_node *n)
+{
+	n->parent = p;
+	p->base.decendent_views += n->decendent_views;
 }
 
 static void
@@ -25,7 +38,7 @@ static void
 node_push(struct scene_layer *parent, struct scene_node *n)
 {
 	node_disconnect(n);
-	n->parent = parent;
+	node_set_parent(parent, n);
 	wl_list_insert(parent->children.prev, &n->link);
 }
 
@@ -35,7 +48,7 @@ node_above(struct scene_node *rel, struct scene_node *n)
 	assert(rel->parent);
 
 	node_disconnect(n);
-	n->parent = rel->parent;
+	node_set_parent(rel->parent, n);
 	wl_list_insert(&rel->link, &n->link);
 }
 
@@ -45,7 +58,7 @@ node_below(struct scene_node *rel, struct scene_node *n)
 	assert(rel->parent);
 
 	node_disconnect(n);
-	n->parent = rel->parent;
+	node_set_parent(rel->parent, n);
 	wl_list_insert(rel->link.prev, &n->link);
 }
 

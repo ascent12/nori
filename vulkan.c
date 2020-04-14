@@ -229,7 +229,7 @@ create_instance(struct vulkan *vk)
 	};
 	static const VkApplicationInfo app = {
 		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-		.apiVersion = VK_API_VERSION_1_1,
+		.apiVersion = VK_API_VERSION_1_2,
 	};
 
 	static const VkInstanceCreateInfo info = {

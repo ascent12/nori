@@ -17,6 +17,8 @@ struct scene_node {
 	enum scene_node_type type;
 
 	struct scene_layer *parent;
+	/* Always == 1 for views, representing itself */
+	int decendent_views;
 
 	int x;
 	int y;
@@ -45,6 +47,11 @@ scene_create(void);
 
 void
 scene_destroy(struct scene *s);
+
+void
+scene_get_vertex_index_sizes(struct scene *s, size_t *vert, size_t *index);
+void
+scene_get_vertex_index_data(struct scene *s, float *vert, uint16_t *index);
 
 struct scene_layer *
 scene_layer_create(void);

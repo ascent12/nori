@@ -17,6 +17,7 @@
 #include "presentation-time-protocol.h"
 #include "xdg-shell-protocol.h"
 
+#include "scene.h"
 #include "vulkan.h"
 
 struct wayland_surface;
@@ -46,7 +47,6 @@ struct wayland_surface {
 	struct wl_surface *surf;
 
 	bool mapped;
-	uint32_t prev_refresh;
 
 	void (*repaint)(struct wayland_surface *, void *);
 	void *repaint_priv;
@@ -70,6 +70,9 @@ struct feedback {
 struct wayland_toplevel {
 	struct wayland_surface base;
 	struct wayland *wl;
+
+	struct scene *scene;
+	struct scene_layer *root;
 	struct vulkan_surface vk_surf;
 
 	struct xdg_surface *xdg;
@@ -88,6 +91,9 @@ struct wayland_toplevel {
 		bool fullscreen;
 		bool activated;
 	} conf;
+
+	/* temporary testing code */
+	struct wl_event_source *timer;
 };
 
 struct wayland_cursor {
