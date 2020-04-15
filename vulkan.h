@@ -21,6 +21,7 @@ struct vulkan_queue {
 struct vulkan_renderpass {
 	VkRenderPass renderpass;
 
+	VkDescriptorSetLayout ds_layout;
 	VkPipelineLayout pipeline_layout;
 	VkPipeline pipeline;
 };
@@ -57,10 +58,12 @@ struct vulkan_frame {
 	VkDeviceMemory memory;
 	VkBuffer vertex_buf;
 	VkBuffer index_buf;
+	VkBuffer uniform_buf;
 
 	VkFence fence;
-};
 
+	VkDescriptorSet desc;
+};
 
 struct vulkan_surface {
 	struct vulkan *vk;
@@ -76,6 +79,8 @@ struct vulkan_surface {
 	uint32_t min_images;
 	uint32_t num_images;
 	struct vulkan_image *images;
+
+	VkDescriptorPool desc_pool;
 
 	VkSemaphore acquire;
 	VkSemaphore done;

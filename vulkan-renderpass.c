@@ -86,13 +86,35 @@ create_pipeline_layout(struct vulkan *vk,
 		       struct vulkan_renderpass *rp)
 {
 	VkResult res;
-	static const VkPushConstantRange range = {
+	static const VkDescriptorSetLayoutBinding ds_binding = {
+		.binding = 0,
+		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		.descriptorCount = 1,
 		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-		.offset = 0,
-		.size = sizeof(float[12]),
 	};
-	static const VkPipelineLayoutCreateInfo info = {
+	static const VkDescriptorSetLayoutCreateInfo ds_layout_info = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.flags = 0,
+		.bindingCount = 1,
+		.pBindings = &ds_binding,
+	};
+
+	res = vkCreateDescriptorSetLayout(vk->logical_device, &ds_layout_info,
+					  NULL, &rp->ds_layout);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateDescriptorSetLayout: 0x%x\n", res);
+		return -1;
+	}
+
+	static const VkPushConstantRange range = {
+		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+		.offset = 0,
+		.size = sizeof(float[4]),
+	};
+	const VkPipelineLayoutCreateInfo info = {
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+		.setLayoutCount = 1,
+		.pSetLayouts = &rp->ds_layout,
 		.pushConstantRangeCount = 1,
 		.pPushConstantRanges = &range,
 	};
@@ -101,8 +123,7 @@ create_pipeline_layout(struct vulkan *vk,
 				     &info, NULL,
 				     &rp->pipeline_layout);
 	if (res < 0) {
-		fprintf(stderr, "vkCreatePipelineLayout: 0x%x\n",
-			res);
+		fprintf(stderr, "vkCreatePipelineLayout: 0x%x\n", res);
 		return -1;
 	}
 

@@ -82,6 +82,32 @@ create_framebuffer(struct vulkan *vk,
 }
 
 static int
+create_descriptor_pool(struct vulkan *vk,
+		       struct vulkan_surface *surf)
+{
+	VkResult res;
+	static const VkDescriptorPoolSize pool_size = {
+		.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		.descriptorCount = 4,
+	};
+	static const VkDescriptorPoolCreateInfo pool_info = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.maxSets = 4,
+		.poolSizeCount = 1,
+		.pPoolSizes = &pool_size,
+	};
+
+	res = vkCreateDescriptorPool(vk->logical_device, &pool_info,
+				     NULL, &surf->desc_pool);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateDesciptorPool: 0x%x\n", res);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
 get_swapchain_images(struct vulkan *vk,
 		     struct vulkan_surface *surf,
 		     uint32_t width, uint32_t height)
@@ -229,16 +255,19 @@ create_buffer(struct vulkan *vk, uint64_t size, VkBufferUsageFlags usage,
 
 static void
 create_buffers(struct vulkan *vk, struct scene *scene, size_t *index_size,
-	       VkBuffer *vert, VkBuffer *index, VkDeviceMemory *mem)
+	       VkBuffer *vert, VkBuffer *index, VkBuffer *uniform,
+	       VkDeviceMemory *mem)
 {
 	size_t vert_size;
 	VkResult res;
 	VkMemoryRequirements vert_req;
 	VkMemoryRequirements index_req;
+	VkMemoryRequirements uniform_req;
 	uint32_t bits;
 	uint64_t align;
 	uint64_t mem_size;
 	uint64_t index_offset;
+	uint64_t uniform_offset;
 	VkPhysicalDeviceMemoryProperties props;
 	static const uint32_t flags =
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -255,25 +284,38 @@ create_buffers(struct vulkan *vk, struct scene *scene, size_t *index_size,
 	create_buffer(vk, *index_size * sizeof(uint16_t),
 		      VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 		      index, &index_req);
+	create_buffer(vk, sizeof(float[3][4]),
+		      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+		      uniform, &uniform_req);
 
-	printf("Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
+	printf("Vert Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
 		vert_req.size, vert_req.alignment, vert_req.memoryTypeBits);
-	printf("Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
+	printf("Index Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
 		index_req.size, index_req.alignment, index_req.memoryTypeBits);
+	printf("Uniform Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
+		uniform_req.size, uniform_req.alignment, uniform_req.memoryTypeBits);
 
-	bits = vert_req.memoryTypeBits & index_req.memoryTypeBits;
+	bits = vert_req.memoryTypeBits & index_req.memoryTypeBits &
+		uniform_req.memoryTypeBits;
 
 	mem_size = vert_req.size;
 
 	align = mem_size % index_req.alignment;
-	if (align != 0) {
+	if (align != 0)
 		mem_size += index_req.alignment - align;
-	}
 
 	index_offset = mem_size;
 	mem_size += index_req.size;
 
-	printf("Total size: %lu, Index offset: %lu\n", mem_size, index_offset);
+	align = mem_size % uniform_req.alignment;
+	if (align != 0)
+		mem_size += uniform_req.alignment - align;
+
+	uniform_offset = mem_size;
+	mem_size += uniform_req.size;
+
+	printf("Total size: %lu, Index offset: %lu, Uniform offset: %lu\n",
+	       mem_size, index_offset, uniform_offset);
 
 	vkGetPhysicalDeviceMemoryProperties(vk->physical_device, &props);
 
@@ -303,7 +345,7 @@ create_buffers(struct vulkan *vk, struct scene *scene, size_t *index_size,
 		abort();
 	}
 
-	const VkBindBufferMemoryInfo bind_info[2] = {
+	const VkBindBufferMemoryInfo bind_info[3] = {
 		{
 			.sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
 			.buffer = *vert,
@@ -316,9 +358,15 @@ create_buffers(struct vulkan *vk, struct scene *scene, size_t *index_size,
 			.memory = *mem,
 			.memoryOffset = index_offset,
 		},
+		{
+			.sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
+			.buffer = *uniform,
+			.memory = *mem,
+			.memoryOffset = uniform_offset,
+		},
 	};
 
-	res = vkBindBufferMemory2(vk->logical_device, 2, bind_info);
+	res = vkBindBufferMemory2(vk->logical_device, 3, bind_info);
 	if (res < 0) {
 		fprintf(stderr, "vkBindBufferMemory2: 0x%x\n", res);
 		abort();
@@ -334,6 +382,14 @@ create_buffers(struct vulkan *vk, struct scene *scene, size_t *index_size,
 
 	scene_get_vertex_index_data(scene, (float *)data,
 				    (uint16_t *)(data + index_offset));
+
+	static const float mat[3][4] = {
+		{ 2.0f / 200.0f, 0.0f, 0.0f, NAN },
+		{ 0.0f, 2.0f / 200.0f, 0.0f, NAN },
+		{ -1.0f, -1.0f, 1.0f, NAN },
+	};
+
+	memcpy(&data[uniform_offset], mat, sizeof mat);
 
 	vkUnmapMemory(vk->logical_device, *mem);
 }
@@ -358,10 +414,12 @@ vulkan_surface_prepare_frame(struct vulkan_surface *surf)
 
 		vkDestroyBuffer(vk->logical_device, f->vertex_buf, NULL);
 		vkDestroyBuffer(vk->logical_device, f->index_buf, NULL);
+		vkDestroyBuffer(vk->logical_device, f->uniform_buf, NULL);
 		vkFreeMemory(vk->logical_device, f->memory, NULL);
 
 		f->vertex_buf = VK_NULL_HANDLE;
 		f->index_buf = VK_NULL_HANDLE;
+		f->uniform_buf = VK_NULL_HANDLE;
 		f->memory = VK_NULL_HANDLE;
 
 		/* Reinsert at end of queue */
@@ -398,6 +456,20 @@ vulkan_surface_prepare_frame(struct vulkan_surface *surf)
 				    &f->fence);
 		if (res < 0) {
 			fprintf(stderr, "vkCreateFence: 0x%x\n", res);
+			return NULL;
+		}
+
+		const VkDescriptorSetAllocateInfo ds_info = {
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+			.descriptorPool = surf->desc_pool,
+			.descriptorSetCount = 1,
+			.pSetLayouts = &vk->renderpass.ds_layout,
+		};
+
+		res = vkAllocateDescriptorSets(vk->logical_device, &ds_info,
+			&f->desc);
+		if (res < 0) {
+			fprintf(stderr, "vkAllocateDescriptorSets: 0x%x\n", res);
 			return NULL;
 		}
 	}
@@ -444,7 +516,23 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 
 	create_buffers(vk, scene, &index_size,
 		       &frame->vertex_buf, &frame->index_buf,
-		       &frame->memory);
+		       &frame->uniform_buf, &frame->memory);
+
+	const VkDescriptorBufferInfo buf_info = {
+		.buffer = frame->uniform_buf,
+		.offset = 0,
+		.range = sizeof(float[3][4]),
+	};
+	const VkWriteDescriptorSet ds_write = {
+		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		.dstSet = frame->desc,
+		.dstBinding = 0,
+		.dstArrayElement = 0,
+		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		.descriptorCount = 1,
+		.pBufferInfo = &buf_info,
+	};
+	vkUpdateDescriptorSets(vk->logical_device, 1, &ds_write, 0, NULL);
 
 	static const VkCommandBufferBeginInfo begin = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -547,24 +635,15 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 	vkCmdBindIndexBuffer(frame->command_buffer, frame->index_buf,
 			     0, VK_INDEX_TYPE_UINT16);
 
-	// Padded out to fit mat3 row alignment
-#if 0
-	float mat[12] = {
-		2.0f / (pen_26_6 >> 6), 0.0f, 0.0f, NAN,
-		0.0f, 2.0f / (line_height >> 6), 0.0f, NAN,
-		-1.0f, -1.0f, 1.0f, NAN,
-	};
-#else
-	float mat[12] = {
-		2.0f / 200.0f, 0.0f, 0.0f, NAN,
-		0.0f, 2.0f / 200.0f, 0.0f, NAN,
-		-1.0f, -1.0f, 1.0f, NAN,
-	};
-#endif
+	vkCmdBindDescriptorSets(frame->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+				vk->renderpass.pipeline_layout, 0, 1, &frame->desc,
+				0, NULL);
+
+	float color[4] = { 0.8f, 0.0f, 0.0f, 0.8f };
 
 	vkCmdPushConstants(frame->command_buffer, vk->renderpass.pipeline_layout,
-			   VK_SHADER_STAGE_VERTEX_BIT, 0,
-			   sizeof mat, mat);
+			   VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+			   sizeof color, color);
 
 	vkCmdDrawIndexed(frame->command_buffer, index_size, 1, 0, 0, 0);
 
@@ -684,6 +763,9 @@ vulkan_surface_init(struct vulkan_surface *surf,
 	surf->min_images = caps.minImageCount;
 
 	if (create_semaphores(vk, surf) < 0)
+		return -1;
+
+	if (create_descriptor_pool(vk, surf) < 0)
 		return -1;
 
 	surf->vk = vk;
