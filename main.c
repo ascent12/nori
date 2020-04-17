@@ -79,11 +79,11 @@ int main(void)
 
 	top = wayland_toplevel_create(&wl, &vk);
 
-	const char *to_print = u8"ゆAaBbCcDdEe";
+	const char *to_print = u8"ffl ffi fl fi";
 	size_t to_print_len = strlen(to_print);
 	hb_unicode_funcs_t *funcs = hb_unicode_funcs_get_default();
 
-	int pixel_size = 32;
+	int pixel_size = 48;
 	int line_height = 0;
 
 	FT_Library ft_lib;
@@ -267,13 +267,13 @@ int main(void)
 
 			printf("bitmap: %dx%d %d %d %d\n", bitmap->width, bitmap->rows,
 				bitmap->pitch, bitmap->pixel_mode, bitmap->num_grays);
-			printf(">> %x\n", ((uint8_t *)bitmap->buffer)[0]);
+			//printf(">> %x\n", ((uint8_t *)bitmap->buffer)[0]);
 
 			if (bitmap->width == 0 || bitmap->rows == 0)
 				goto advance;
 
-			int32_t x = (pen_26_6 >> 6) + ft_face->glyph->bitmap_left;
-			int32_t y = (ft_face->ascender >> 6) - ft_face->glyph->bitmap_top;
+			int32_t x = ((pen_26_6 + pos[i].x_offset) >> 6) + ft_face->glyph->bitmap_left;
+			int32_t y = ((ft_face->ascender + pos[i].y_offset) >> 6) - ft_face->glyph->bitmap_top;
 			int32_t width = bitmap->width;
 			int32_t height = bitmap->rows;
 
@@ -281,9 +281,9 @@ int main(void)
 			scene_push(top->root, v);
 			scene_set_pos(v, x, y);
 
-			if (!top->vk_surf.texture)
-				top->vk_surf.texture =
-					vulkan_texture_create(&vk, width, height, bitmap->pitch, bitmap->buffer);
+			v->texture = vulkan_texture_create(&vk, width, height,
+							   bitmap->pitch,
+							   bitmap->buffer);
 advance:
 			pen_26_6 += pos[i].x_advance;
 		}
@@ -313,7 +313,8 @@ add:
 	printf("===\n");
 
 	top->timer = wl_event_loop_add_timer(ev, timer_func, top);
-	wl_event_source_timer_update(top->timer, 5);
+	//wl_event_source_timer_update(top->timer, 5);
+	scene_set_pos(top->root, top->root->base.x, 80);
 
 	wayland_surface_schedule_repaint(&top->base);
 	while (!wl.exit && !top->close)

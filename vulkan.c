@@ -71,12 +71,21 @@ create_logical_device(struct vulkan *vk, uint32_t gfx, uint32_t xfer)
 	};
 	uint32_t num_queues = gfx == xfer ? 1 : 2;
 
+	static const VkPhysicalDeviceFeatures features = {
+		/*
+		 * Allows us to use uniforms to index texture arrays
+		 * in our shaders. AFAIK this is supported on all "real"
+		 * Vulkan implementations.
+		 */
+		.shaderSampledImageArrayDynamicIndexing = VK_TRUE,
+	};
 	const VkDeviceCreateInfo info = {
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
 		.queueCreateInfoCount = num_queues,
 		.pQueueCreateInfos = queues,
 		.enabledExtensionCount = ARRAY_LEN(exts),
 		.ppEnabledExtensionNames = exts,
+		.pEnabledFeatures = &features,
 	};
 
 	res = vkCreateDevice(vk->physical_device, &info, NULL, &vk->logical_device);
@@ -157,17 +166,37 @@ select_physical_device(struct vulkan *vk, struct wl_display *wl,
 	vkEnumeratePhysicalDevices(vk->instance, &num_phy, phy);
 
 	uint32_t i;
-	for (i = 0; i < num_phy; ++i)
-		if (physical_device_find_queues(phy[i], wl, gfx, xfer) == 0)
-			break;
+	for (i = 0; i < num_phy; ++i) {
+		VkPhysicalDeviceProperties props;
+		VkPhysicalDeviceFeatures features;
 
-	if (i == num_phy) {
-		printf("VK: No suitable device found\n");
-		return -1;
+		vkGetPhysicalDeviceProperties(phy[i], &props);
+		vkGetPhysicalDeviceFeatures(phy[i], &features);
+
+		if (props.apiVersion < VK_API_VERSION_1_2)
+			continue;
+
+		if (!features.shaderSampledImageArrayDynamicIndexing)
+			continue;
+
+		if (physical_device_find_queues(phy[i], wl, gfx, xfer) < 0)
+			continue;
+
+		vk->physical_device = phy[i];
+		vk->max_textures = props.limits.maxPerStageDescriptorSampledImages;
+
+		/*
+		 * Lets keep it somewhat sensible, but still significantly
+		 * higher than we'll realistically need
+		 */
+		if (vk->max_textures > 1024)
+			vk->max_textures = 1024;
+
+		return 0;
 	}
 
-	vk->physical_device = phy[i];
-	return 0;
+	printf("VK: No suitable device found\n");
+	return -1;
 }
 
 static VkBool32

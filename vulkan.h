@@ -21,7 +21,7 @@ struct vulkan_queue {
 struct vulkan_renderpass {
 	VkRenderPass renderpass;
 
-	VkDescriptorSetLayout ds_layout;
+	VkDescriptorSetLayout ds_layouts[2];
 	VkPipelineLayout pipeline_layout;
 	VkPipeline pipeline;
 };
@@ -37,6 +37,8 @@ struct vulkan {
 	/* These may or may not be the same */
 	struct vulkan_queue *gfx_queue;
 	struct vulkan_queue *xfer_queue;
+
+	uint32_t max_textures;
 
 	struct vulkan_renderpass renderpass;
 };
@@ -62,7 +64,7 @@ struct vulkan_frame {
 
 	VkFence fence;
 
-	VkDescriptorSet desc;
+	VkDescriptorSet desc[2];
 };
 
 struct vulkan_texture {
@@ -86,7 +88,7 @@ struct vulkan_surface {
 	uint32_t num_images;
 	struct vulkan_image *images;
 
-	VkDescriptorPool desc_pool;
+	VkDescriptorPool desc_pools[2];
 
 	VkSemaphore acquire;
 	VkSemaphore done;

@@ -2,6 +2,7 @@
 
 #include "vulkan.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -86,7 +87,8 @@ create_pipeline_layout(struct vulkan *vk,
 		       struct vulkan_renderpass *rp)
 {
 	VkResult res;
-	static const VkDescriptorSetLayoutBinding ds_bindings[] = {
+	const VkDescriptorSetLayoutBinding ds_bindings[] = {
+		/* vk->ds_layouts[0] */
 		{
 			.binding = 0,
 			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -95,40 +97,51 @@ create_pipeline_layout(struct vulkan *vk,
 		},
 		{
 			.binding = 1,
-			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-			.descriptorCount = 1,
-			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-		},
-		{
-			.binding = 2,
 			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
 			.descriptorCount = 1,
 			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 		},
+		/* vk->ds_layouts[1] */
+		{
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+			.descriptorCount = vk->max_textures,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+		},
 	};
-	static const VkDescriptorSetLayoutCreateInfo ds_layout_info = {
-		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		.flags = 0,
-		.bindingCount = ARRAY_LEN(ds_bindings),
-		.pBindings = ds_bindings,
+	const VkDescriptorSetLayoutCreateInfo ds_layout_info[] = {
+		{
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+			.bindingCount = 2,
+			.pBindings = &ds_bindings[0],
+		},
+		{
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+			.bindingCount = 1,
+			.pBindings = &ds_bindings[2],
+		},
 	};
 
-	res = vkCreateDescriptorSetLayout(vk->logical_device, &ds_layout_info,
-					  NULL, &rp->ds_layout);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateDescriptorSetLayout: 0x%x\n", res);
-		return -1;
+	static_assert(ARRAY_LEN(ds_layout_info) == ARRAY_LEN(rp->ds_layouts), "");
+	for (size_t i = 0; i < ARRAY_LEN(ds_layout_info); ++i) {
+		res = vkCreateDescriptorSetLayout(vk->logical_device,
+						  &ds_layout_info[i],
+						  NULL, &rp->ds_layouts[i]);
+		if (res < 0) {
+			fprintf(stderr, "vkCreateDescriptorSetLayout: 0x%x\n", res);
+			return -1;
+		}
 	}
 
 	static const VkPushConstantRange range = {
 		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 		.offset = 0,
-		.size = sizeof(float[4]),
+		.size = sizeof(int32_t),
 	};
 	const VkPipelineLayoutCreateInfo info = {
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-		.setLayoutCount = 1,
-		.pSetLayouts = &rp->ds_layout,
+		.setLayoutCount = ARRAY_LEN(rp->ds_layouts),
+		.pSetLayouts = rp->ds_layouts,
 		.pushConstantRangeCount = 1,
 		.pPushConstantRanges = &range,
 	};
@@ -183,6 +196,17 @@ create_pipeline(struct vulkan *vk,
 		VkShaderModule *vert, VkShaderModule *frag)
 {
 	VkResult res;
+	static const VkSpecializationMapEntry max_tex = {
+		.constantID = 0,
+		.offset = 0,
+		.size = sizeof(vk->max_textures),
+	};
+	const VkSpecializationInfo frag_spec = {
+		.mapEntryCount = 1,
+		.pMapEntries = &max_tex,
+		.dataSize = sizeof(vk->max_textures),
+		.pData = &vk->max_textures,
+	};
 	const VkPipelineShaderStageCreateInfo shader_info[2] = {
 		{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -195,6 +219,7 @@ create_pipeline(struct vulkan *vk,
 			.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
 			.module = *frag,
 			.pName = "main",
+			.pSpecializationInfo = &frag_spec,
 		},
 	};
 
