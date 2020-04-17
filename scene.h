@@ -6,6 +6,7 @@
 #include <wayland-util.h>
 
 struct scene_layer;
+struct vulkan_texture;
 
 enum scene_node_type {
 	SCENE_NODE_LAYER,
@@ -33,9 +34,9 @@ struct scene_layer {
 struct scene_view {
 	struct scene_node base;
 
-	/* TODO: Replace these with some texture type */
 	int width;
 	int height;
+	struct vulkan_texture *texture;
 };
 
 struct scene {
@@ -58,6 +59,10 @@ scene_layer_create(void);
 
 struct scene_view *
 scene_view_create(int width, int height);
+
+typedef void (*scene_iter_fn)(struct scene_view *, void *);
+void
+scene_for_each(struct scene *s, scene_iter_fn fn, void *data);
 
 void
 scene_dump(struct scene *s);

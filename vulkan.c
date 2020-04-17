@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_wayland.h>
@@ -269,4 +270,281 @@ vulkan_create(struct vulkan *vk, struct wl_display *wl)
 		return -1;
 
 	return 0;
+}
+
+static void
+create_buffer(struct vulkan *vk, uint64_t size, VkBufferUsageFlags usage,
+	      VkBuffer *buf, VkMemoryRequirements *reqs)
+{
+	VkResult res;
+	const VkBufferCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		.size = size,
+		.usage = usage,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+	};
+
+	res = vkCreateBuffer(vk->logical_device, &info, NULL, buf);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateBuffer: 0x%x\n",
+			res);
+		abort();
+	}
+
+	vkGetBufferMemoryRequirements(vk->logical_device, *buf, reqs);
+}
+
+struct vulkan_texture *
+vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
+		      void *pixels)
+{
+	VkResult res;
+	uint8_t (*in_data)[stride] = pixels;
+	struct vulkan_texture *t;
+	VkBuffer staging;
+	VkMemoryRequirements req;
+	VkDeviceMemory mem;
+	void *mapped;
+	uint8_t (*out_data)[width];
+	VkPhysicalDeviceMemoryProperties props;
+	uint32_t i;
+	static const uint32_t staging_flags =
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+		VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	static const uint32_t img_flags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+	VkCommandBuffer cmd;
+
+	t = calloc(1, sizeof *t);
+	if (!t)
+		return NULL;
+
+	create_buffer(vk, width * height, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		      &staging, &req);
+
+	vkGetPhysicalDeviceMemoryProperties(vk->physical_device, &props);
+
+	for (i = 0; i < props.memoryTypeCount; ++i) {
+		if (!(req.memoryTypeBits & (1 << i)))
+			continue;
+		if (!(props.memoryTypes[i].propertyFlags & staging_flags))
+			continue;
+
+		break;
+	}
+
+	const VkMemoryAllocateInfo alloc_info1 = {
+		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.allocationSize = req.size,
+		.memoryTypeIndex = i,
+	};
+
+	res = vkAllocateMemory(vk->logical_device, &alloc_info1, NULL, &mem);
+	if (res < 0) {
+		fprintf(stderr, "vkAllocateMemory: 0x%x\n", res);
+		abort();
+	}
+
+	vkBindBufferMemory(vk->logical_device, staging, mem, 0);
+
+	vkMapMemory(vk->logical_device, mem, 0, width * height, 0, &mapped);
+	out_data = mapped;
+
+	for (int i = 0; i < height; ++i)
+		memcpy(out_data[i], in_data[i], sizeof out_data[i]);
+
+	vkUnmapMemory(vk->logical_device, mem);
+
+	const VkImageCreateInfo img_info = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		.imageType = VK_IMAGE_TYPE_2D,
+		.format = VK_FORMAT_R8_UNORM,
+		.extent.width = width,
+		.extent.height = height,
+		.extent.depth = 1,
+		.mipLevels = 1,
+		.arrayLayers = 1,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.tiling = VK_IMAGE_TILING_OPTIMAL,
+		.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+			 VK_IMAGE_USAGE_SAMPLED_BIT,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+	};
+
+	res = vkCreateImage(vk->logical_device, &img_info, NULL, &t->image);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateImage: 0x%x\n", res);
+		return NULL;
+	}
+
+	vkGetImageMemoryRequirements(vk->logical_device, t->image, &req);
+	printf("Tex Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
+		req.size, req.alignment, req.memoryTypeBits);
+
+	for (i = 0; i < props.memoryTypeCount; ++i) {
+		if (!(req.memoryTypeBits & (1 << i)))
+			continue;
+		if (!(props.memoryTypes[i].propertyFlags & img_flags))
+			continue;
+
+		break;
+	}
+
+	const VkMemoryAllocateInfo alloc_info2 = {
+		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.allocationSize = req.size,
+		.memoryTypeIndex = i,
+	};
+
+	res = vkAllocateMemory(vk->logical_device, &alloc_info2, NULL, &t->memory);
+	if (res < 0) {
+		fprintf(stderr, "vkAllocateMemory: 0x%x\n", res);
+		abort();
+	}
+
+	vkBindImageMemory(vk->logical_device, t->image, t->memory, 0);
+
+	const VkCommandBufferAllocateInfo cmd_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.commandPool = vk->gfx_queue->command_pool,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandBufferCount = 1,
+	};
+
+	res = vkAllocateCommandBuffers(vk->logical_device, &cmd_info,
+				       &cmd);
+	if (res < 0) {
+		fprintf(stderr, "vkAllocateCommandBuffers: 0x%x\n", res);
+		abort();
+	}
+	
+	static const VkCommandBufferBeginInfo begin = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+	};
+
+	res = vkBeginCommandBuffer(cmd, &begin);
+	if (res < 0) {
+		fprintf(stderr, "vkBeginCommandBuffer: 0x%x\n", res);
+		abort();
+	}
+
+	const VkImageMemoryBarrier barrier_info1 = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.srcAccessMask = 0,
+		.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+		.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.image = t->image,
+		.subresourceRange = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
+
+	vkCmdPipelineBarrier(cmd,
+			     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+			     VK_PIPELINE_STAGE_TRANSFER_BIT,
+			     0, 0, NULL, 0, NULL, 1, &barrier_info1);
+
+	const VkBufferImageCopy region = {
+		.bufferOffset = 0,
+		.bufferRowLength = 0,
+		.bufferImageHeight = 0,
+		.imageSubresource = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.mipLevel = 0,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+		.imageOffset = { .x = 0, .y = 0, .z = 0 },
+		.imageExtent = {
+			.width = width,
+			.height = height,
+			.depth = 1,
+		},
+	};
+
+	vkCmdCopyBufferToImage(cmd, staging, t->image,
+			       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			       1, &region);
+
+	const VkImageMemoryBarrier barrier_info2 = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+		.dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+		.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.image = t->image,
+		.subresourceRange = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
+
+	vkCmdPipelineBarrier(cmd,
+			     VK_PIPELINE_STAGE_TRANSFER_BIT,
+			     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			     0, 0, NULL, 0, NULL, 1, &barrier_info2);
+
+	res = vkEndCommandBuffer(cmd);
+	if (res < 0) {
+		fprintf(stderr, "vkEndCommandBuffer: 0x%x\n", res);
+		abort();
+	}
+
+	const VkSubmitInfo submit_info = {
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &cmd,
+	};
+	res = vkQueueSubmit(vk->gfx_queue->queue, 1, &submit_info,
+			    VK_NULL_HANDLE);
+	if (res < 0) {
+		fprintf(stderr, "vkQueueSubmit: 0x%x\n", res);
+		abort();
+	}
+
+	vkQueueWaitIdle(vk->gfx_queue->queue);
+
+	vkFreeCommandBuffers(vk->logical_device, vk->gfx_queue->command_pool,
+			     1, &cmd);
+
+	const VkImageViewCreateInfo view_info = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+		.image = t->image,
+		.viewType = VK_IMAGE_VIEW_TYPE_2D,
+		.format = VK_FORMAT_R8_UNORM,
+		.components = {
+			.r = VK_COMPONENT_SWIZZLE_ZERO,
+			.g = VK_COMPONENT_SWIZZLE_ZERO,
+			.b = VK_COMPONENT_SWIZZLE_ZERO,
+			.a = VK_COMPONENT_SWIZZLE_R,
+		},
+		.subresourceRange = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
+
+	res = vkCreateImageView(vk->logical_device, &view_info, NULL, &t->view);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateImageView: 0x%x\n", res);
+		abort();
+	}
+
+	return t;
 }

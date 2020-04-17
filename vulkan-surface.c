@@ -86,15 +86,25 @@ create_descriptor_pool(struct vulkan *vk,
 		       struct vulkan_surface *surf)
 {
 	VkResult res;
-	static const VkDescriptorPoolSize pool_size = {
-		.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		.descriptorCount = 4,
+	static const VkDescriptorPoolSize pool_sizes[3] = {
+		{
+			.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.descriptorCount = 4,
+		},
+		{
+			.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+			.descriptorCount = 4,
+		},
+		{
+			.type = VK_DESCRIPTOR_TYPE_SAMPLER,
+			.descriptorCount = 4,
+		},
 	};
 	static const VkDescriptorPoolCreateInfo pool_info = {
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
 		.maxSets = 4,
-		.poolSizeCount = 1,
-		.pPoolSizes = &pool_size,
+		.poolSizeCount = 3,
+		.pPoolSizes = pool_sizes,
 	};
 
 	res = vkCreateDescriptorPool(vk->logical_device, &pool_info,
@@ -523,16 +533,43 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 		.offset = 0,
 		.range = sizeof(float[3][4]),
 	};
-	const VkWriteDescriptorSet ds_write = {
-		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet = frame->desc,
-		.dstBinding = 0,
-		.dstArrayElement = 0,
-		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		.descriptorCount = 1,
-		.pBufferInfo = &buf_info,
+	const VkDescriptorImageInfo image_info = {
+		.imageView = surf->texture->view,
+		.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 	};
-	vkUpdateDescriptorSets(vk->logical_device, 1, &ds_write, 0, NULL);
+	const VkDescriptorImageInfo sampler_info = {
+		.sampler = surf->sampler,
+	};
+	const VkWriteDescriptorSet ds_writes[3] = {
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = frame->desc,
+			.dstBinding = 0,
+			.dstArrayElement = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.descriptorCount = 1,
+			.pBufferInfo = &buf_info,
+		},
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = frame->desc,
+			.dstBinding = 1,
+			.dstArrayElement = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+			.descriptorCount = 1,
+			.pImageInfo = &image_info,
+		},
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = frame->desc,
+			.dstBinding = 2,
+			.dstArrayElement = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+			.descriptorCount = 1,
+			.pImageInfo = &sampler_info,
+		},
+	};
+	vkUpdateDescriptorSets(vk->logical_device, 3, ds_writes, 0, NULL);
 
 	static const VkCommandBufferBeginInfo begin = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -694,8 +731,8 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 	return 0;
 }
 
-static int create_semaphores(struct vulkan *vk,
-			     struct vulkan_surface *surf)
+static int
+create_semaphores(struct vulkan *vk, struct vulkan_surface *surf)
 {
 	VkResult res;
 	static const VkSemaphoreCreateInfo info = {
@@ -705,16 +742,44 @@ static int create_semaphores(struct vulkan *vk,
 	res = vkCreateSemaphore(vk->logical_device, &info, NULL,
 				&surf->acquire);
 	if (res < 0) {
-		fprintf(stderr, "vkCreateSemaphore: 0x%x\n",
-			res);
+		fprintf(stderr, "vkCreateSemaphore: 0x%x\n", res);
 		return -1;
 	}
 
 	res = vkCreateSemaphore(vk->logical_device, &info, NULL,
 				&surf->done);
 	if (res < 0) {
-		fprintf(stderr, "vkCreateSemaphore: 0x%x\n",
-			res);
+		fprintf(stderr, "vkCreateSemaphore: 0x%x\n", res);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+create_sampler(struct vulkan *vk, struct vulkan_surface *surf)
+{
+	VkResult res;
+	static const VkSamplerCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+		.flags = 0,
+		.magFilter = VK_FILTER_LINEAR,
+		.minFilter = VK_FILTER_LINEAR,
+		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+		.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+		.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+		.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+		.mipLodBias = 0.0f,
+		.anisotropyEnable = VK_FALSE,
+		.compareEnable = VK_FALSE,
+		.minLod = 0.0f,
+		.maxLod = 0.0f,
+		.unnormalizedCoordinates = VK_FALSE,
+	};
+
+	res = vkCreateSampler(vk->logical_device, &info, NULL, &surf->sampler);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateSampler: 0x%x\n", res);
 		return -1;
 	}
 
@@ -766,6 +831,9 @@ vulkan_surface_init(struct vulkan_surface *surf,
 		return -1;
 
 	if (create_descriptor_pool(vk, surf) < 0)
+		return -1;
+
+	if (create_sampler(vk, surf) < 0)
 		return -1;
 
 	surf->vk = vk;

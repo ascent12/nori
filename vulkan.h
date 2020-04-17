@@ -65,6 +65,12 @@ struct vulkan_frame {
 	VkDescriptorSet desc;
 };
 
+struct vulkan_texture {
+	VkDeviceMemory memory;
+	VkImage image;
+	VkImageView view;
+};
+
 struct vulkan_surface {
 	struct vulkan *vk;
 
@@ -84,6 +90,9 @@ struct vulkan_surface {
 
 	VkSemaphore acquire;
 	VkSemaphore done;
+
+	VkSampler sampler;
+	struct vulkan_texture *texture;
 
 	struct wl_list frame_res;
 };
@@ -105,5 +114,9 @@ vulkan_surface_repaint(struct vulkan_surface *vk_surface, struct scene *scene);
 int
 vulkan_init_renderpass(struct vulkan *vk,
 		       struct vulkan_renderpass *rp);
+
+struct vulkan_texture *
+vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
+		      void *data);
 
 #endif

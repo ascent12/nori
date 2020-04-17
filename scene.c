@@ -35,7 +35,7 @@ scene_get_vertex_index_sizes(struct scene *s, size_t *vert, size_t *index)
 	}
 
 	/* 4 corners of x+y */
-	*vert = s->root->decendent_views * 8;
+	*vert = s->root->decendent_views * 16;
 	/* 2 triangles */
 	*index = s->root->decendent_views * 6;
 }
@@ -61,24 +61,32 @@ write_view(struct scene_view *v, float *vert, uint16_t *index,
 	// Top left
 	vert[*vert_i + 0] = x;
 	vert[*vert_i + 1] = y;
+	vert[*vert_i + 2] = 0.0f;
+	vert[*vert_i + 3] = 0.0f;
 	// Top right
-	vert[*vert_i + 2] = x + v->width;
-	vert[*vert_i + 3] = y;
-	// Bottom right
 	vert[*vert_i + 4] = x + v->width;
-	vert[*vert_i + 5] = y + v->height;
+	vert[*vert_i + 5] = y;
+	vert[*vert_i + 6] = 1.0f;//v->width;
+	vert[*vert_i + 7] = 0.0f;
+	// Bottom right
+	vert[*vert_i + 8] = x + v->width;
+	vert[*vert_i + 9] = y + v->height;
+	vert[*vert_i + 10] = 1.0f;//v->width;
+	vert[*vert_i + 11] = 1.0f;//v->height;
 	// Bottom left
-	vert[*vert_i + 6] = x;
-	vert[*vert_i + 7] = y + v->height;
+	vert[*vert_i + 12] = x;
+	vert[*vert_i + 13] = y + v->height;
+	vert[*vert_i + 14] = 0.0f;
+	vert[*vert_i + 15] = 1.0f;//v->height;
 
-	index[*index_i + 0] = *vert_i / 2 + 0;
-	index[*index_i + 1] = *vert_i / 2 + 1;
-	index[*index_i + 2] = *vert_i / 2 + 2;
-	index[*index_i + 3] = *vert_i / 2 + 0;
-	index[*index_i + 4] = *vert_i / 2 + 2;
-	index[*index_i + 5] = *vert_i / 2 + 3;
+	index[*index_i + 0] = *vert_i / 4 + 0;
+	index[*index_i + 1] = *vert_i / 4 + 1;
+	index[*index_i + 2] = *vert_i / 4 + 2;
+	index[*index_i + 3] = *vert_i / 4 + 0;
+	index[*index_i + 4] = *vert_i / 4 + 2;
+	index[*index_i + 5] = *vert_i / 4 + 3;
 
-	*vert_i += 8;
+	*vert_i += 16;
 	*index_i += 6;
 }
 
@@ -135,6 +143,33 @@ scene_get_vertex_index_data(struct scene *s, float *vert, uint16_t *index)
 	}
 
 	printf("===\n");
+}
+
+static void
+for_each_node(struct scene_node *n, scene_iter_fn fn, void *data)
+{
+	struct scene_layer *l;
+	struct scene_node *iter;
+	
+	switch (n->type) {
+	case SCENE_NODE_LAYER:
+		l = (struct scene_layer *)n;
+		wl_list_for_each(iter, &l->children, link)
+			for_each_node(iter, fn, data);
+		break;
+	case SCENE_NODE_VIEW:
+		fn((struct scene_view *)n, data);
+		break;
+	}
+}
+
+void
+scene_for_each(struct scene *s, scene_iter_fn fn, void *data)
+{
+	if (!s->root)
+		return;
+
+	for_each_node(s->root, fn, data);
 }
 
 struct scene_layer *

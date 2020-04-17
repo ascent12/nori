@@ -86,17 +86,31 @@ create_pipeline_layout(struct vulkan *vk,
 		       struct vulkan_renderpass *rp)
 {
 	VkResult res;
-	static const VkDescriptorSetLayoutBinding ds_binding = {
-		.binding = 0,
-		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		.descriptorCount = 1,
-		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+	static const VkDescriptorSetLayoutBinding ds_bindings[] = {
+		{
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+		},
+		{
+			.binding = 1,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+		},
+		{
+			.binding = 2,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+		},
 	};
 	static const VkDescriptorSetLayoutCreateInfo ds_layout_info = {
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 		.flags = 0,
-		.bindingCount = 1,
-		.pBindings = &ds_binding,
+		.bindingCount = ARRAY_LEN(ds_bindings),
+		.pBindings = ds_bindings,
 	};
 
 	res = vkCreateDescriptorSetLayout(vk->logical_device, &ds_layout_info,
@@ -186,7 +200,7 @@ create_pipeline(struct vulkan *vk,
 
 	static const VkVertexInputBindingDescription vi_bind = {
 		.binding = 0,
-		.stride = sizeof(float[2]),
+		.stride = sizeof(float[4]),
 		.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
 	};
 	static const VkVertexInputAttributeDescription vi_attr[] = {
@@ -195,6 +209,12 @@ create_pipeline(struct vulkan *vk,
 			.location = 0,
 			.format = VK_FORMAT_R32G32_SFLOAT,
 			.offset = 0,
+		},
+		{
+			.binding = 0,
+			.location = 1,
+			.format = VK_FORMAT_R32G32_SFLOAT,
+			.offset = sizeof(float[2]),
 		},
 	};
 	static const VkPipelineVertexInputStateCreateInfo vi_info = {
@@ -247,8 +267,8 @@ create_pipeline(struct vulkan *vk,
 		.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
 		.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
 		.colorBlendOp = VK_BLEND_OP_ADD,
-		.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-		.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+		.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+		.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
 		.alphaBlendOp = VK_BLEND_OP_ADD,
 		.colorWriteMask =
 			VK_COLOR_COMPONENT_R_BIT |

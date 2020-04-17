@@ -79,11 +79,11 @@ int main(void)
 
 	top = wayland_toplevel_create(&wl, &vk);
 
-	const char *to_print = u8"AaBbCcDdEe";
+	const char *to_print = u8"ゆAaBbCcDdEe";
 	size_t to_print_len = strlen(to_print);
 	hb_unicode_funcs_t *funcs = hb_unicode_funcs_get_default();
 
-	int pixel_size = 18;
+	int pixel_size = 32;
 	int line_height = 0;
 
 	FT_Library ft_lib;
@@ -267,6 +267,7 @@ int main(void)
 
 			printf("bitmap: %dx%d %d %d %d\n", bitmap->width, bitmap->rows,
 				bitmap->pitch, bitmap->pixel_mode, bitmap->num_grays);
+			printf(">> %x\n", ((uint8_t *)bitmap->buffer)[0]);
 
 			if (bitmap->width == 0 || bitmap->rows == 0)
 				goto advance;
@@ -279,6 +280,10 @@ int main(void)
 			struct scene_view *v = scene_view_create(width, height);
 			scene_push(top->root, v);
 			scene_set_pos(v, x, y);
+
+			if (!top->vk_surf.texture)
+				top->vk_surf.texture =
+					vulkan_texture_create(&vk, width, height, bitmap->pitch, bitmap->buffer);
 advance:
 			pen_26_6 += pos[i].x_advance;
 		}
