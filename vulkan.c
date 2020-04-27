@@ -298,29 +298,10 @@ vulkan_create(struct vulkan *vk, struct wl_display *wl)
 	if (create_logical_device(vk, gfx, xfer) < 0)
 		return -1;
 
+	if (vulkan_mm_setup_types(vk) < 0)
+		return -1;
+
 	return 0;
-}
-
-static void
-create_buffer(struct vulkan *vk, uint64_t size, VkBufferUsageFlags usage,
-	      VkBuffer *buf, VkMemoryRequirements *reqs)
-{
-	VkResult res;
-	const VkBufferCreateInfo info = {
-		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-		.size = size,
-		.usage = usage,
-		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-	};
-
-	res = vkCreateBuffer(vk->logical_device, &info, NULL, buf);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateBuffer: 0x%x\n",
-			res);
-		abort();
-	}
-
-	vkGetBufferMemoryRequirements(vk->logical_device, *buf, reqs);
 }
 
 struct vulkan_texture *
@@ -328,110 +309,29 @@ vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
 		      void *pixels)
 {
 	VkResult res;
-	uint8_t (*in_data)[stride] = pixels;
 	struct vulkan_texture *t;
-	VkBuffer staging;
-	VkMemoryRequirements req;
-	VkDeviceMemory mem;
-	void *mapped;
-	uint8_t (*out_data)[width];
-	VkPhysicalDeviceMemoryProperties props;
-	uint32_t i;
-	static const uint32_t staging_flags =
-		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-		VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-	static const uint32_t img_flags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+	struct vulkan_buffer staging;
+	uint8_t (*in_data)[stride] = pixels;
+	uint8_t (*data)[width];
 	VkCommandBuffer cmd;
+	static const VkComponentMapping mapping = {
+		.r = VK_COMPONENT_SWIZZLE_ZERO,
+		.g = VK_COMPONENT_SWIZZLE_ZERO,
+		.b = VK_COMPONENT_SWIZZLE_ZERO,
+		.a = VK_COMPONENT_SWIZZLE_R,
+	};
 
-	t = calloc(1, sizeof *t);
+	t = vulkan_mm_alloc_texture(vk, VK_FORMAT_R8_UNORM,
+				    width, height, &mapping);
 	if (!t)
 		return NULL;
 
-	create_buffer(vk, width * height, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-		      &staging, &req);
 
-	vkGetPhysicalDeviceMemoryProperties(vk->physical_device, &props);
-
-	for (i = 0; i < props.memoryTypeCount; ++i) {
-		if (!(req.memoryTypeBits & (1 << i)))
-			continue;
-		if (!(props.memoryTypes[i].propertyFlags & staging_flags))
-			continue;
-
-		break;
-	}
-
-	const VkMemoryAllocateInfo alloc_info1 = {
-		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-		.allocationSize = req.size,
-		.memoryTypeIndex = i,
-	};
-
-	res = vkAllocateMemory(vk->logical_device, &alloc_info1, NULL, &mem);
-	if (res < 0) {
-		fprintf(stderr, "vkAllocateMemory: 0x%x\n", res);
-		abort();
-	}
-
-	vkBindBufferMemory(vk->logical_device, staging, mem, 0);
-
-	vkMapMemory(vk->logical_device, mem, 0, width * height, 0, &mapped);
-	out_data = mapped;
+	vulkan_mm_alloc_staging_buffer(vk, &staging, width * height);
+	data = staging.mem->data;
 
 	for (int i = 0; i < height; ++i)
-		memcpy(out_data[i], in_data[i], sizeof out_data[i]);
-
-	vkUnmapMemory(vk->logical_device, mem);
-
-	const VkImageCreateInfo img_info = {
-		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-		.imageType = VK_IMAGE_TYPE_2D,
-		.format = VK_FORMAT_R8_UNORM,
-		.extent.width = width,
-		.extent.height = height,
-		.extent.depth = 1,
-		.mipLevels = 1,
-		.arrayLayers = 1,
-		.samples = VK_SAMPLE_COUNT_1_BIT,
-		.tiling = VK_IMAGE_TILING_OPTIMAL,
-		.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-			 VK_IMAGE_USAGE_SAMPLED_BIT,
-		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-	};
-
-	res = vkCreateImage(vk->logical_device, &img_info, NULL, &t->image);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateImage: 0x%x\n", res);
-		return NULL;
-	}
-
-	vkGetImageMemoryRequirements(vk->logical_device, t->image, &req);
-	printf("Tex Memory Requirements: size: %lu, align: %lu, bits: 0x%x\n",
-		req.size, req.alignment, req.memoryTypeBits);
-
-	for (i = 0; i < props.memoryTypeCount; ++i) {
-		if (!(req.memoryTypeBits & (1 << i)))
-			continue;
-		if (!(props.memoryTypes[i].propertyFlags & img_flags))
-			continue;
-
-		break;
-	}
-
-	const VkMemoryAllocateInfo alloc_info2 = {
-		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-		.allocationSize = req.size,
-		.memoryTypeIndex = i,
-	};
-
-	res = vkAllocateMemory(vk->logical_device, &alloc_info2, NULL, &t->memory);
-	if (res < 0) {
-		fprintf(stderr, "vkAllocateMemory: 0x%x\n", res);
-		abort();
-	}
-
-	vkBindImageMemory(vk->logical_device, t->image, t->memory, 0);
+		memcpy(data[i], in_data[i], sizeof data[i]);
 
 	const VkCommandBufferAllocateInfo cmd_info = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -440,8 +340,7 @@ vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
 		.commandBufferCount = 1,
 	};
 
-	res = vkAllocateCommandBuffers(vk->logical_device, &cmd_info,
-				       &cmd);
+	res = vkAllocateCommandBuffers(vk->logical_device, &cmd_info, &cmd);
 	if (res < 0) {
 		fprintf(stderr, "vkAllocateCommandBuffers: 0x%x\n", res);
 		abort();
@@ -499,7 +398,7 @@ vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
 		},
 	};
 
-	vkCmdCopyBufferToImage(cmd, staging, t->image,
+	vkCmdCopyBufferToImage(cmd, staging.buffer, t->image,
 			       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			       1, &region);
 
@@ -549,31 +448,7 @@ vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
 	vkFreeCommandBuffers(vk->logical_device, vk->gfx_queue->command_pool,
 			     1, &cmd);
 
-	const VkImageViewCreateInfo view_info = {
-		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-		.image = t->image,
-		.viewType = VK_IMAGE_VIEW_TYPE_2D,
-		.format = VK_FORMAT_R8_UNORM,
-		.components = {
-			.r = VK_COMPONENT_SWIZZLE_ZERO,
-			.g = VK_COMPONENT_SWIZZLE_ZERO,
-			.b = VK_COMPONENT_SWIZZLE_ZERO,
-			.a = VK_COMPONENT_SWIZZLE_R,
-		},
-		.subresourceRange = {
-			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-			.baseMipLevel = 0,
-			.levelCount = 1,
-			.baseArrayLayer = 0,
-			.layerCount = 1,
-		},
-	};
-
-	res = vkCreateImageView(vk->logical_device, &view_info, NULL, &t->view);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateImageView: 0x%x\n", res);
-		abort();
-	}
+	vulkan_mm_free_buffer(vk, &staging);
 
 	return t;
 }

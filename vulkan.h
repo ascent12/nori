@@ -38,9 +38,51 @@ struct vulkan {
 	struct vulkan_queue *gfx_queue;
 	struct vulkan_queue *xfer_queue;
 
+	/*
+	 * Memory types we use for various purposes.
+	 * These may alias.
+	 *
+	 * staging_type:
+	 *   CPU-accessable for transferring data to the device.
+	 *
+	 * texture_type:
+	 *   Should be in fastest device memory.
+	 *
+	 * uniform_type, vertex_type:
+	 *   Ideally CPU-accessable, but may not be.
+	 */
+	uint32_t staging_type;
+	uint32_t texture_type;
+	uint32_t uniform_type;
+	uint32_t vertex_type;
+
 	uint32_t max_textures;
 
 	struct vulkan_renderpass renderpass;
+};
+
+struct vulkan_memory {
+	struct wl_list link;
+	size_t ref;
+
+	VkDeviceMemory memory;
+	uint64_t size;
+	void *data;
+
+	bool dedicated;
+};
+
+struct vulkan_buffer {
+	VkBuffer buffer;
+	struct vulkan_memory *mem;
+	uint64_t offset;
+	uint64_t size;
+};
+
+struct vulkan_texture {
+	VkImage image;
+	VkImageView view;
+	struct vulkan_memory *mem;
 };
 
 struct vulkan_image {
@@ -57,20 +99,12 @@ struct vulkan_frame {
 
 	VkCommandBuffer command_buffer;
 
-	VkDeviceMemory memory;
-	VkBuffer vertex_buf;
-	VkBuffer index_buf;
-	VkBuffer uniform_buf;
+	struct vulkan_buffer uniform;
+	struct vulkan_buffer vertex;
 
 	VkFence fence;
 
 	VkDescriptorSet desc[2];
-};
-
-struct vulkan_texture {
-	VkDeviceMemory memory;
-	VkImage image;
-	VkImageView view;
 };
 
 struct vulkan_surface {
@@ -120,5 +154,25 @@ vulkan_init_renderpass(struct vulkan *vk,
 struct vulkan_texture *
 vulkan_texture_create(struct vulkan *vk, int width, int height, int stride,
 		      void *data);
+
+int
+vulkan_mm_setup_types(struct vulkan *vk);
+
+int
+vulkan_mm_alloc_staging_buffer(struct vulkan *vk, struct vulkan_buffer *b,
+			       size_t size);
+int
+vulkan_mm_alloc_uniform_buffer(struct vulkan *vk, struct vulkan_buffer *b,
+			       size_t size);
+int
+vulkan_mm_alloc_vertex_buffer(struct vulkan *vk, struct vulkan_buffer *b,
+			      size_t size);
+
+struct vulkan_texture *
+vulkan_mm_alloc_texture(struct vulkan *vk, VkFormat format,
+			int width, int height, const VkComponentMapping *mapping);
+
+void
+vulkan_mm_free_buffer(struct vulkan *vk, struct vulkan_buffer *b);
 
 #endif

@@ -49,10 +49,10 @@ scene_create(void);
 void
 scene_destroy(struct scene *s);
 
+size_t
+scene_get_vertex_size(struct scene *s);
 void
-scene_get_vertex_index_sizes(struct scene *s, size_t *vert, size_t *index);
-void
-scene_get_vertex_index_data(struct scene *s, float *vert, uint16_t *index);
+scene_get_vertex_data(struct scene *s, float *vert);
 
 struct scene_layer *
 scene_layer_create(void);

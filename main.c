@@ -79,7 +79,7 @@ int main(void)
 
 	top = wayland_toplevel_create(&wl, &vk);
 
-	const char *to_print = u8"ffl ffi fl fi";
+	const char *to_print = u8"AaBbCcDd";
 	size_t to_print_len = strlen(to_print);
 	hb_unicode_funcs_t *funcs = hb_unicode_funcs_get_default();
 
@@ -123,7 +123,7 @@ int main(void)
 			continue;
 
 		FcPatternGetString(matching->fonts[i], FC_FILE, 0, &file);
-		printf("file: %s\n", file);
+		//printf("file: %s\n", file);
 
 		p = FcFontRenderPrepare(NULL, pat, matching->fonts[i]);
 		if (p)
@@ -141,7 +141,7 @@ int main(void)
 	FcFontSetDestroy(matching);
 	FcPatternDestroy(pat);
 
-	printf("===\n");
+	//printf("===\n");
 
 	hb_buffer_t *buf = hb_buffer_create();
 	hb_buffer_t *shaped = hb_buffer_create();

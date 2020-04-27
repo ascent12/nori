@@ -252,10 +252,6 @@ create_pipeline(struct vulkan *vk,
 
 	static const VkPipelineInputAssemblyStateCreateInfo asm_info = {
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-#if 0
-		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN,
-		.primitiveRestartEnable = VK_TRUE,
-#endif
 		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
 		.primitiveRestartEnable = VK_FALSE,
 	};
@@ -272,7 +268,7 @@ create_pipeline(struct vulkan *vk,
 		.rasterizerDiscardEnable = VK_FALSE,
 		.polygonMode = VK_POLYGON_MODE_FILL,
 		.cullMode = VK_CULL_MODE_NONE,
-		.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+		.frontFace = VK_FRONT_FACE_CLOCKWISE,
 		.depthBiasEnable = VK_FALSE,
 		.lineWidth = 1.0f,
 	};

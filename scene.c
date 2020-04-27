@@ -25,120 +25,94 @@ scene_destroy(struct scene *s)
 	free(s);
 }
 
-void
-scene_get_vertex_index_sizes(struct scene *s, size_t *vert, size_t *index)
+size_t
+scene_get_vertex_size(struct scene *s)
 {
-	if (!s->root) {
-		*vert = 0;
-		*index = 0;
-		return;
-	}
+	if (!s->root)
+		return 0;
 
-	/* 4 corners of x+y */
-	*vert = s->root->decendent_views * 16;
-	/* 2 triangles */
-	*index = s->root->decendent_views * 6;
+	/* 6 verticies with 4 floats each */
+	return s->root->decendent_views * 6 * 4;
 }
 
 static void
-write_node(struct scene_node *n, float *vert, uint16_t *index,
-	   size_t *vert_i, size_t *index_i, float x, float y);
+write_node(struct scene_node *n, float *vert, size_t *i, float x, float y);
 
 static void
-write_layer(struct scene_layer *l, float *vert, uint16_t *index,
-	    size_t *vert_i, size_t *index_i, float x, float y)
+write_layer(struct scene_layer *l, float *vert, size_t *i, float x, float y)
 {
 	struct scene_node *n;
 	wl_list_for_each(n, &l->children, link) {
-		write_node(n, vert, index, vert_i, index_i, x, y);
+		write_node(n, vert, i, x, y);
 	}
 }
 
 static void
-write_view(struct scene_view *v, float *vert, uint16_t *index,
-	   size_t *vert_i, size_t *index_i, float x, float y)
+emit_vertex(float *vert, size_t *i,
+	    float x, float y, float tex_x, float tex_y)
 {
-	// Top left
-	vert[*vert_i + 0] = x;
-	vert[*vert_i + 1] = y;
-	vert[*vert_i + 2] = 0.0f;
-	vert[*vert_i + 3] = 0.0f;
-	// Top right
-	vert[*vert_i + 4] = x + v->width;
-	vert[*vert_i + 5] = y;
-	vert[*vert_i + 6] = 1.0f;//v->width;
-	vert[*vert_i + 7] = 0.0f;
-	// Bottom right
-	vert[*vert_i + 8] = x + v->width;
-	vert[*vert_i + 9] = y + v->height;
-	vert[*vert_i + 10] = 1.0f;//v->width;
-	vert[*vert_i + 11] = 1.0f;//v->height;
-	// Bottom left
-	vert[*vert_i + 12] = x;
-	vert[*vert_i + 13] = y + v->height;
-	vert[*vert_i + 14] = 0.0f;
-	vert[*vert_i + 15] = 1.0f;//v->height;
+	vert[*i + 0] = x;
+	vert[*i + 1] = y;
+	vert[*i + 2] = tex_x;
+	vert[*i + 3] = tex_y;
 
-	index[*index_i + 0] = *vert_i / 4 + 0;
-	index[*index_i + 1] = *vert_i / 4 + 1;
-	index[*index_i + 2] = *vert_i / 4 + 2;
-	index[*index_i + 3] = *vert_i / 4 + 0;
-	index[*index_i + 4] = *vert_i / 4 + 2;
-	index[*index_i + 5] = *vert_i / 4 + 3;
-
-	*vert_i += 16;
-	*index_i += 6;
+	*i += 4;
 }
 
 static void
-write_node(struct scene_node *n, float *vert, uint16_t *index,
-	   size_t *vert_i, size_t *index_i, float x, float y)
+write_view(struct scene_view *v, float *vert, size_t *i, float x, float y)
+{
+	/* Top left */
+	emit_vertex(vert, i, x, y, 0.0f, 0.0f);
+	/* Top right */
+	emit_vertex(vert, i, x + v->width, y, 1.0f, 0.0f);
+	/* Bottom right */
+	emit_vertex(vert, i, x + v->width, y + v->height, 1.0f, 1.0f);
+
+	/* Bottom right */
+	emit_vertex(vert, i, x + v->width, y + v->height, 1.0f, 1.0f);
+	/* Bottom left */
+	emit_vertex(vert, i, x, y + v->height, 0.0f, 1.0f);
+	/* Top left */
+	emit_vertex(vert, i, x, y, 0.0f, 0.0f);
+}
+
+static void
+write_node(struct scene_node *n, float *vert, size_t *i, float x, float y)
 {
 	x += n->x;
 	y += n->y;
 
 	switch (n->type) {
 	case SCENE_NODE_LAYER:
-		write_layer((struct scene_layer *)n, vert, index,
-			    vert_i, index_i, x, y);
+		write_layer((struct scene_layer *)n, vert, i, x, y);
 		break;
 	case SCENE_NODE_VIEW:
-		write_view((struct scene_view *)n, vert, index,
-			    vert_i, index_i, x, y);
+		write_view((struct scene_view *)n, vert, i, x, y);
 		break;
 	}
 }
 
 void
-scene_get_vertex_index_data(struct scene *s, float *vert, uint16_t *index)
+scene_get_vertex_data(struct scene *s, float *vert)
 {
-	size_t vert_i = 0, index_i = 0;
-	size_t vert_len, index_len;
-	scene_get_vertex_index_sizes(s, &vert_len, &index_len);
+	size_t i = 0;
+	size_t len = scene_get_vertex_size(s);
 
 	if (!s->root)
 		return;
 
-	write_node(s->root, vert, index, &vert_i, &index_i, 0.0f, 0.0f);
+	write_node(s->root, vert, &i, 0.0f, 0.0f);
 
-	assert(vert_i == vert_len && index_i == index_len);
+	assert(i == len);
 
 	printf("===\n");
 
 	float (*vert_data)[8] = (void *)vert;
-	for (size_t i = 0; i < vert_len / 8; ++i) {
+	for (size_t i = 0; i < len / 8; ++i) {
 		for (int j = 0; j < 4; ++j)
 			printf("(%.1f, %.1f), ", vert_data[i][j * 2],
 			       vert_data[i][j * 2 + 1]);
-		printf("\n");
-	}
-
-	printf("===\n");
-
-	uint16_t (*index_data)[6] = (void *)index;
-	for (size_t i = 0; i < index_len / 6; ++i) {
-		for (int j = 0; j < 6; ++j)
-			printf("%hu, ", index_data[i][j]);
 		printf("\n");
 	}
 
