@@ -74,6 +74,8 @@ create_logical_device(struct vulkan *vk, uint32_t gfx, uint32_t xfer)
 	VkPhysicalDeviceVulkan12Features vk12_f = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
 		.descriptorBindingPartiallyBound = VK_TRUE,
+		/* Guranteed for Vulkan 1.2 graphics implementations */
+		.imagelessFramebuffer = VK_TRUE,
 	};
 	VkPhysicalDeviceFeatures2 f = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,

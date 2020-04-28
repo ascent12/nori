@@ -90,7 +90,6 @@ struct vulkan_texture {
 struct vulkan_image {
 	VkImage image;
 	VkImageView image_view;
-	VkFramebuffer framebuffer;
 
 	bool undefined;
 };
@@ -114,6 +113,7 @@ struct vulkan_surface {
 
 	VkSurfaceKHR surface;
 	VkSwapchainKHR swapchain;
+	VkFramebuffer framebuffer;
 
 	bool needs_realloc;
 

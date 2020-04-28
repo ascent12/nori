@@ -55,35 +55,6 @@ create_image_view(struct vulkan *vk,
 }
 
 static int
-create_framebuffer(struct vulkan *vk,
-		   struct vulkan_image *image,
-		   uint32_t width, uint32_t height)
-{
-	VkResult res;
-	const VkFramebufferCreateInfo info = {
-		.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-		.renderPass = vk->renderpass.renderpass,
-		.attachmentCount = 1,
-		.pAttachments = &image->image_view,
-		.width = width,
-		.height = height,
-		.layers = 1,
-	};
-
-	res = vkCreateFramebuffer(vk->logical_device,
-				  &info,
-				  NULL,
-				  &image->framebuffer);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateFramebuffer: 0x%x\n",
-			res);
-		return -1;
-	}
-
-	return 0;
-}
-
-static int
 create_descriptor_pool(struct vulkan *vk, struct vulkan_surface *surf)
 {
 	VkResult res;
@@ -145,13 +116,56 @@ get_swapchain_images(struct vulkan *vk,
 		if (create_image_view(vk, img) < 0)
 			return -1;
 
-		if (create_framebuffer(vk, img, width, height) < 0)
-			return -1;
-
 		img->undefined = true;
 	}
 
 	surf->num_images = num_images;
+
+	return 0;
+}
+
+static int
+create_framebuffer(struct vulkan *vk,
+		   struct vulkan_surface *surf,
+		   uint32_t width, uint32_t height)
+{
+	VkResult res;
+	static const VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
+	const VkFramebufferAttachmentImageInfo attach = {
+		.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
+		.flags = 0,
+		.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+		.width = width,
+		.height = height,
+		.layerCount = 1,
+		.viewFormatCount = 1,
+		.pViewFormats = &format,
+	};
+	const VkFramebufferAttachmentsCreateInfo attach_info = {
+		.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENTS_CREATE_INFO,
+		.attachmentImageInfoCount = 1,
+		.pAttachmentImageInfos = &attach,
+	};
+	const VkFramebufferCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+		.pNext = &attach_info,
+		.flags = VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT,
+		.renderPass = vk->renderpass.renderpass,
+		.attachmentCount = 1,
+		.pAttachments = NULL,
+		.width = width,
+		.height = height,
+		.layers = 1,
+	};
+
+	res = vkCreateFramebuffer(vk->logical_device,
+				  &info,
+				  NULL,
+				  &surf->framebuffer);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateFramebuffer: 0x%x\n", res);
+		return -1;
+	}
 
 	return 0;
 }
@@ -202,14 +216,15 @@ cleanup_old_swapchain(struct vulkan *vk,
 	if (surf->swapchain == VK_NULL_HANDLE)
 		return;
 
+	vkDestroyFramebuffer(vk->logical_device, surf->framebuffer, NULL);
+	surf->framebuffer = VK_NULL_HANDLE;
+
 	for (uint32_t i = 0; i < surf->num_images; ++i) {
 		struct vulkan_image *img = &surf->images[i];
 
-		vkDestroyFramebuffer(vk->logical_device, img->framebuffer, NULL);
 		vkDestroyImageView(vk->logical_device, img->image_view, NULL);
 		img->image = VK_NULL_HANDLE;
 		img->image_view = VK_NULL_HANDLE;
-		img->framebuffer = VK_NULL_HANDLE;
 	}
 }
 
@@ -223,6 +238,9 @@ vulkan_surface_resize_swapchain(struct vulkan *vk,
 	cleanup_old_swapchain(vk, surf);
 
 	if (create_swapchain(vk, surf, width, height) < 0)
+		return -1;
+
+	if (create_framebuffer(vk, surf, width, height) < 0)
 		return -1;
 
 	if (get_swapchain_images(vk, surf, width, height) < 0)
@@ -491,10 +509,16 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 		img->undefined = false;
 	}
 
+	const VkRenderPassAttachmentBeginInfo attach = {
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO,
+		.attachmentCount = 1,
+		.pAttachments = &img->image_view,
+	};
 	const VkRenderPassBeginInfo rp_info = {
 		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+		.pNext = &attach,
 		.renderPass = vk->renderpass.renderpass,
-		.framebuffer = img->framebuffer,
+		.framebuffer = surf->framebuffer,
 		.renderArea.offset.x = 0,
 		.renderArea.offset.y = 0,
 		.renderArea.extent.width = surf->width,
