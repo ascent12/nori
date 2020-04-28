@@ -83,54 +83,86 @@ create_renderpass(struct vulkan *vk,
 }
 
 static int
-create_pipeline_layout(struct vulkan *vk,
-		       struct vulkan_renderpass *rp)
+create_sampler(struct vulkan *vk, struct vulkan_renderpass *rp)
 {
 	VkResult res;
-	const VkDescriptorSetLayoutBinding ds_bindings[] = {
-		/* vk->ds_layouts[0] */
+	static const VkSamplerCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+		.flags = 0,
+		.magFilter = VK_FILTER_LINEAR,
+		.minFilter = VK_FILTER_LINEAR,
+		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+		.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+		.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+		.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+		.mipLodBias = 0.0f,
+		.anisotropyEnable = VK_FALSE,
+		.compareEnable = VK_FALSE,
+		.minLod = 0.0f,
+		.maxLod = 0.0f,
+		.unnormalizedCoordinates = VK_FALSE,
+	};
+
+	res = vkCreateSampler(vk->logical_device, &info, NULL, &rp->sampler);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateSampler: 0x%x\n", res);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+create_pipeline_layout(struct vulkan *vk, struct vulkan_renderpass *rp)
+{
+	VkResult res;
+	static const VkDescriptorBindingFlags desc_flags[] = {
+		0,
+		0,
+		VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
+	};
+	const VkDescriptorSetLayoutBinding desc_bindings[] = {
 		{
 			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.pImmutableSamplers = &rp->sampler,
+		},
+		{
+			.binding = 1,
 			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			.descriptorCount = 1,
 			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 		},
 		{
-			.binding = 1,
-			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
-			.descriptorCount = 1,
-			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-		},
-		/* vk->ds_layouts[1] */
-		{
-			.binding = 0,
+			.binding = 2,
 			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
 			.descriptorCount = vk->max_textures,
 			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 		},
 	};
-	const VkDescriptorSetLayoutCreateInfo ds_layout_info[] = {
-		{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-			.bindingCount = 2,
-			.pBindings = &ds_bindings[0],
-		},
-		{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-			.bindingCount = 1,
-			.pBindings = &ds_bindings[2],
-		},
+
+	static_assert(ARRAY_LEN(desc_flags) == ARRAY_LEN(desc_bindings));
+
+	static const VkDescriptorSetLayoutBindingFlagsCreateInfo binding_info = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+		.bindingCount = ARRAY_LEN(desc_flags),
+		.pBindingFlags = desc_flags,
+	};
+	const VkDescriptorSetLayoutCreateInfo desc_layout_info = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.pNext = &binding_info,
+		.bindingCount = ARRAY_LEN(desc_bindings),
+		.pBindings = desc_bindings,
 	};
 
-	static_assert(ARRAY_LEN(ds_layout_info) == ARRAY_LEN(rp->ds_layouts), "");
-	for (size_t i = 0; i < ARRAY_LEN(ds_layout_info); ++i) {
-		res = vkCreateDescriptorSetLayout(vk->logical_device,
-						  &ds_layout_info[i],
-						  NULL, &rp->ds_layouts[i]);
-		if (res < 0) {
-			fprintf(stderr, "vkCreateDescriptorSetLayout: 0x%x\n", res);
-			return -1;
-		}
+	res = vkCreateDescriptorSetLayout(vk->logical_device,
+					  &desc_layout_info,
+					  NULL, &rp->desc_layout);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateDescriptorSetLayout: 0x%x\n", res);
+		return -1;
 	}
 
 	static const VkPushConstantRange range = {
@@ -140,8 +172,8 @@ create_pipeline_layout(struct vulkan *vk,
 	};
 	const VkPipelineLayoutCreateInfo info = {
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-		.setLayoutCount = ARRAY_LEN(rp->ds_layouts),
-		.pSetLayouts = rp->ds_layouts,
+		.setLayoutCount = 1,
+		.pSetLayouts = &rp->desc_layout,
 		.pushConstantRangeCount = 1,
 		.pPushConstantRanges = &range,
 	};
@@ -355,6 +387,9 @@ vulkan_init_renderpass(struct vulkan *vk,
 	VkShaderModule vert, frag;
 
 	if (create_renderpass(vk, rp) < 0)
+		return -1;
+
+	if (create_sampler(vk, rp) < 0)
 		return -1;
 
 	if (create_pipeline_layout(vk, rp) < 0)

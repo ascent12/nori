@@ -84,50 +84,32 @@ create_framebuffer(struct vulkan *vk,
 }
 
 static int
-create_descriptor_pool(struct vulkan *vk,
-		       struct vulkan_surface *surf)
+create_descriptor_pool(struct vulkan *vk, struct vulkan_surface *surf)
 {
 	VkResult res;
-	static const VkDescriptorPoolSize pool_sizes_0[] = {
+	const VkDescriptorPoolSize sizes[] = {
 		{
 			.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-			.descriptorCount = 2,
+			.descriptorCount = 1,
 		},
-		{
-			.type = VK_DESCRIPTOR_TYPE_SAMPLER,
-			.descriptorCount = 2,
-		},
-	};
-	const VkDescriptorPoolSize pool_sizes_1[] = {
 		{
 			.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-			.descriptorCount = vk->max_textures * 2,
+			.descriptorCount = vk->max_textures,
 		},
 	};
 
-	const VkDescriptorPoolCreateInfo pool_info[] = {
-		{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-			.maxSets = 2,
-			.poolSizeCount = ARRAY_LEN(pool_sizes_0),
-			.pPoolSizes = pool_sizes_0,
-		},
-		{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-			.maxSets = 2,
-			.poolSizeCount = ARRAY_LEN(pool_sizes_1),
-			.pPoolSizes = pool_sizes_1,
-		},
+	const VkDescriptorPoolCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.maxSets = 2,
+		.poolSizeCount = ARRAY_LEN(sizes),
+		.pPoolSizes = sizes,
 	};
 
-	static_assert(ARRAY_LEN(pool_info) == ARRAY_LEN(surf->desc_pools), "");
-	for (size_t i = 0; i < ARRAY_LEN(pool_info); ++i) {
-		res = vkCreateDescriptorPool(vk->logical_device, &pool_info[i],
-					     NULL, &surf->desc_pools[i]);
-		if (res < 0) {
-			fprintf(stderr, "vkCreateDesciptorPool: 0x%x\n", res);
-			return -1;
-		}
+	res = vkCreateDescriptorPool(vk->logical_device, &info,
+				     NULL, &surf->desc_pool);
+	if (res < 0) {
+		fprintf(stderr, "vkCreateDesciptorPool: 0x%x\n", res);
+		return -1;
 	}
 
 	return 0;
@@ -315,20 +297,18 @@ vulkan_surface_prepare_frame(struct vulkan_surface *surf)
 			return NULL;
 		}
 
-		for (size_t i = 0; i < ARRAY_LEN(f->desc); ++i) {
-			const VkDescriptorSetAllocateInfo ds_info = {
-				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-				.descriptorPool = surf->desc_pools[i],
-				.descriptorSetCount = 1,
-				.pSetLayouts = &vk->renderpass.ds_layouts[i],
-			};
+		const VkDescriptorSetAllocateInfo ds_info = {
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+			.descriptorPool = surf->desc_pool,
+			.descriptorSetCount = 1,
+			.pSetLayouts = &vk->renderpass.desc_layout,
+		};
 
-			res = vkAllocateDescriptorSets(vk->logical_device, &ds_info,
-						       &f->desc[i]);
-			if (res < 0) {
-				fprintf(stderr, "vkAllocateDescriptorSets: 0x%x\n", res);
-				return NULL;
-			}
+		res = vkAllocateDescriptorSets(vk->logical_device, &ds_info,
+					       &f->desc);
+		if (res < 0) {
+			fprintf(stderr, "vkAllocateDescriptorSets: 0x%x\n", res);
+			return NULL;
 		}
 	}
 
@@ -337,40 +317,29 @@ vulkan_surface_prepare_frame(struct vulkan_surface *surf)
 	return f;
 }
 
-struct draw {
-	struct vulkan *vk;
-	struct vulkan_frame *frame;
+struct update {
+	VkDescriptorImageInfo *info;
 	int32_t index;
 };
 
 static void
 update_ds(struct scene_view *v, void *data)
 {
-	struct draw *d = data;
-	struct vulkan *vk = d->vk;
-	struct vulkan_frame *frame = d->frame;
-	int32_t index = d->index;
+	struct update *u = data;
 
-	const VkDescriptorImageInfo image_info = {
+	u->info[u->index] = (VkDescriptorImageInfo) {
 		.imageView = v->texture->view,
 		.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 	};
-	const VkWriteDescriptorSet ds_write = {
-		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet = frame->desc[1],
-		.dstBinding = 0,
-		.dstArrayElement = index,
-		.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-		.descriptorCount = 1,
-		.pImageInfo = &image_info,
-	};
 
-	vkUpdateDescriptorSets(vk->logical_device, 1, &ds_write, 0, NULL);
-
-	printf("Updated descriptor %d\n", index);
-
-	++d->index;
+	++u->index;
 }
+
+struct draw {
+	struct vulkan *vk;
+	struct vulkan_frame *frame;
+	int32_t index;
+};
 
 static void
 draw_view(struct scene_view *v, void *data)
@@ -442,19 +411,22 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 	vulkan_mm_alloc_vertex_buffer(vk, &frame->vertex, vert_len * sizeof(float));
 	scene_get_vertex_data(scene, frame->vertex.mem->data);
 
+	size_t num_textures = scene_get_num_nodes(scene);
+
+	struct update update = { 0 };
+	update.info = calloc(num_textures, sizeof *update.info);
+	scene_for_each(scene, update_ds, &update);
+
 	const VkDescriptorBufferInfo buf_info = {
 		.buffer = frame->uniform.buffer,
 		.offset = 0,
 		.range = sizeof mat,
 	};
-	const VkDescriptorImageInfo sampler_info = {
-		.sampler = surf->sampler,
-	};
 	const VkWriteDescriptorSet ds_writes[] = {
 		{
 			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			.dstSet = frame->desc[0],
-			.dstBinding = 0,
+			.dstSet = frame->desc,
+			.dstBinding = 1,
 			.dstArrayElement = 0,
 			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			.descriptorCount = 1,
@@ -462,18 +434,17 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 		},
 		{
 			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			.dstSet = frame->desc[0],
-			.dstBinding = 1,
+			.dstSet = frame->desc,
+			.dstBinding = 2,
 			.dstArrayElement = 0,
-			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
-			.descriptorCount = 1,
-			.pImageInfo = &sampler_info,
+			.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+			.descriptorCount = num_textures,
+			.pImageInfo = update.info,
 		},
 	};
 	vkUpdateDescriptorSets(vk->logical_device,
 			       ARRAY_LEN(ds_writes), ds_writes,
 			       0, NULL);
-	scene_for_each(scene, update_ds, &draw);
 
 	static const VkCommandBufferBeginInfo begin = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -575,7 +546,7 @@ vulkan_surface_repaint(struct vulkan_surface *surf, struct scene *scene)
 
 	vkCmdBindDescriptorSets(frame->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				vk->renderpass.pipeline_layout, 0,
-				ARRAY_LEN(frame->desc), frame->desc,
+				1, &frame->desc,
 				0, NULL);
 
 	draw.index = 0;
@@ -653,36 +624,6 @@ create_semaphores(struct vulkan *vk, struct vulkan_surface *surf)
 	return 0;
 }
 
-static int
-create_sampler(struct vulkan *vk, struct vulkan_surface *surf)
-{
-	VkResult res;
-	static const VkSamplerCreateInfo info = {
-		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-		.flags = 0,
-		.magFilter = VK_FILTER_LINEAR,
-		.minFilter = VK_FILTER_LINEAR,
-		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
-		.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-		.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-		.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-		.mipLodBias = 0.0f,
-		.anisotropyEnable = VK_FALSE,
-		.compareEnable = VK_FALSE,
-		.minLod = 0.0f,
-		.maxLod = 0.0f,
-		.unnormalizedCoordinates = VK_FALSE,
-	};
-
-	res = vkCreateSampler(vk->logical_device, &info, NULL, &surf->sampler);
-	if (res < 0) {
-		fprintf(stderr, "vkCreateSampler: 0x%x\n", res);
-		return -1;
-	}
-
-	return 0;
-}
-
 int
 vulkan_surface_init(struct vulkan_surface *surf,
 		    struct vulkan *vk,
@@ -728,9 +669,6 @@ vulkan_surface_init(struct vulkan_surface *surf,
 		return -1;
 
 	if (create_descriptor_pool(vk, surf) < 0)
-		return -1;
-
-	if (create_sampler(vk, surf) < 0)
 		return -1;
 
 	surf->vk = vk;

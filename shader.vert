@@ -6,7 +6,7 @@ layout(location = 0) in vec2 position;
 layout(location = 1) in vec2 tex_coord_in;
 layout(location = 0) out vec2 tex_coord_out;
 
-layout(set = 0, binding = 0) uniform block {
+layout(set = 0, binding = 1) uniform block {
 	mat3 mat;
 };
 

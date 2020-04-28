@@ -50,6 +50,8 @@ void
 scene_destroy(struct scene *s);
 
 size_t
+scene_get_num_nodes(struct scene *s);
+size_t
 scene_get_vertex_size(struct scene *s);
 void
 scene_get_vertex_data(struct scene *s, float *vert);

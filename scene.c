@@ -26,13 +26,18 @@ scene_destroy(struct scene *s)
 }
 
 size_t
-scene_get_vertex_size(struct scene *s)
+scene_get_num_nodes(struct scene *s)
 {
 	if (!s->root)
 		return 0;
 
-	/* 6 verticies with 4 floats each */
-	return s->root->decendent_views * 6 * 4;
+	return s->root->decendent_views;
+}
+
+size_t
+scene_get_vertex_size(struct scene *s)
+{
+	return scene_get_num_nodes(s) * 6 * 4;
 }
 
 static void

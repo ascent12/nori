@@ -71,21 +71,28 @@ create_logical_device(struct vulkan *vk, uint32_t gfx, uint32_t xfer)
 	};
 	uint32_t num_queues = gfx == xfer ? 1 : 2;
 
-	static const VkPhysicalDeviceFeatures features = {
+	VkPhysicalDeviceVulkan12Features vk12_f = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+		.descriptorBindingPartiallyBound = VK_TRUE,
+	};
+	VkPhysicalDeviceFeatures2 f = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+		.pNext = &vk12_f,
 		/*
 		 * Allows us to use uniforms to index texture arrays
 		 * in our shaders. AFAIK this is supported on all "real"
 		 * Vulkan implementations.
 		 */
-		.shaderSampledImageArrayDynamicIndexing = VK_TRUE,
+		.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE,
 	};
 	const VkDeviceCreateInfo info = {
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+		.pNext = &f,
 		.queueCreateInfoCount = num_queues,
 		.pQueueCreateInfos = queues,
 		.enabledExtensionCount = ARRAY_LEN(exts),
 		.ppEnabledExtensionNames = exts,
-		.pEnabledFeatures = &features,
+		.pEnabledFeatures = NULL,
 	};
 
 	res = vkCreateDevice(vk->physical_device, &info, NULL, &vk->logical_device);
@@ -165,18 +172,25 @@ select_physical_device(struct vulkan *vk, struct wl_display *wl,
 	VkPhysicalDevice phy[num_phy];
 	vkEnumeratePhysicalDevices(vk->instance, &num_phy, phy);
 
-	uint32_t i;
-	for (i = 0; i < num_phy; ++i) {
+	for (uint32_t i = 0; i < num_phy; ++i) {
 		VkPhysicalDeviceProperties props;
-		VkPhysicalDeviceFeatures features;
+		VkPhysicalDeviceVulkan12Features vk12_f = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+		};
+		VkPhysicalDeviceFeatures2 f = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+			.pNext = &vk12_f,
+		};
 
 		vkGetPhysicalDeviceProperties(phy[i], &props);
-		vkGetPhysicalDeviceFeatures(phy[i], &features);
+		vkGetPhysicalDeviceFeatures2(phy[i], &f);
 
 		if (props.apiVersion < VK_API_VERSION_1_2)
 			continue;
 
-		if (!features.shaderSampledImageArrayDynamicIndexing)
+		if (!f.features.shaderSampledImageArrayDynamicIndexing)
+			continue;
+		if (!vk12_f.descriptorBindingPartiallyBound)
 			continue;
 
 		if (physical_device_find_queues(phy[i], wl, gfx, xfer) < 0)
